@@ -119,6 +119,37 @@ static bool BoxOverlapsCell(int x, int y, int col, int row, int width)
 	return false;
 }
 
+static bool WallBlocks(Game& g, int c, int r)
+{
+	std::vector<MovingWall>& ws = T::walls(g);
+	for (size_t i = 0; i < ws.size(); i++) if (ws[i].Blocks(c, r)) return true;
+	return false;
+}
+
+/* First step of a shortest path from Pac-Man to (tc, tr). */
+static Dir ChaseStep(Game& g, int tc, int tr)
+{
+	Level& l = T::level(g);
+	int w = l.Width(), h = l.Height();
+	std::vector<int> first(w * h, -1);
+	std::deque<int> q;
+	int sc = l.WrapCol(T::pac(g).Col()), sr = T::pac(g).Row();
+	first[sr * w + sc] = 4;
+	q.push_back(sr * w + sc);
+	while (!q.empty()) {
+		int cur = q.front(); q.pop_front();
+		int c = cur % w, r = cur / w;
+		if (c == tc && r == tr) return first[cur] == 4 ? DIR_NONE : (Dir)first[cur];
+		for (int d = 0; d < 4; d++) {
+			int nc = l.WrapCol(c + DIR_DX[d]), nr = r + DIR_DY[d];
+			if (!T::PacCanEnter(g, nc, nr) || first[nr * w + nc] != -1) continue;
+			first[nr * w + nc] = first[cur] == 4 ? d : first[cur];
+			q.push_back(nr * w + nc);
+		}
+	}
+	return DIR_NONE;
+}
+
 /* ---- single player ------------------------------------------------- */
 
 static void TestLevel()
@@ -220,67 +251,125 @@ static void TestCompleteSinglePlayer()
 	CHECK(T::phase(g) == PHASE_COMPLETED);
 }
 
-static void TestMovingWalls()
+static void TestGates()
 {
-	printf("moving walls slide but never crush anyone\n");
+	printf("gates open and close passages, never on anyone\n");
 	srand(1);
 	Game g;
 	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_WALLS));
-	CHECK(T::walls(g).size() == 3);
+	std::vector<MovingWall>& ws = T::walls(g);
+	CHECK(ws.size() == 5);
 	T::StartPlaying(g);
 	T::me(g).lives = 1000;   /* keep playing through deaths */
-	std::vector<MovingWall> start = T::walls(g);
-	bool moved = false, crushed = false;
 	static const Dir DIRS[4] = { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
 	int w = T::level(g).Width();
-	for (int t = 0; t < 120 * TICKS_PER_SEC; t++) {
+	std::vector<int> open_ticks(ws.size(), 0), closed_ticks(ws.size(), 0), passed(ws.size(), 0);
+	bool crushed = false;
+	const int TICKS = 180 * TICKS_PER_SEC;
+	for (int t = 0; t < TICKS; t++) {
 		if (t % 30 == 0) T::wanted(g) = DIRS[rand() % 4];  /* wander about */
 		Run(g, 1);
 		if (T::phase(g) != PHASE_PLAYING) continue;
-		const std::vector<MovingWall>& ws = T::walls(g);
 		for (size_t i = 0; i < ws.size(); i++) {
-			if (ws[i].col != start[i].col || ws[i].row != start[i].row) moved = true;
-			int cells[2][2] = { { ws[i].col, ws[i].row }, { ws[i].from_col, ws[i].from_row } };
-			for (int k = 0; k < (ws[i].slide > 0 ? 2 : 1); k++) {
-				if (BoxOverlapsCell(T::pac(g).x, T::pac(g).y, cells[k][0], cells[k][1], w)) crushed = true;
-				for (size_t j = 0; j < T::ghosts(g).size(); j++)
-					if (BoxOverlapsCell(T::ghosts(g)[j].x, T::ghosts(g)[j].y, cells[k][0], cells[k][1], w)) crushed = true;
-			}
+			bool blocks = ws[i].Blocks(ws[i].col, ws[i].row);
+			(blocks ? closed_ticks : open_ticks)[i]++;
+			bool someone = BoxOverlapsCell(T::pac(g).x, T::pac(g).y, ws[i].col, ws[i].row, w);
+			for (size_t j = 0; j < T::ghosts(g).size(); j++)
+				if (BoxOverlapsCell(T::ghosts(g)[j].x, T::ghosts(g)[j].y, ws[i].col, ws[i].row, w)) someone = true;
+			if (someone && blocks && ws[i].slide == 0 && ws[i].closed) crushed = true;
+			if (someone && !blocks) passed[i]++;
 		}
 	}
-	CHECK(moved);
+	int total_passed = 0;
+	for (size_t i = 0; i < ws.size(); i++) {
+		int total = open_ticks[i] + closed_ticks[i];
+		/* Each gate spends a fair share of the time open and closed. */
+		CHECK(open_ticks[i] > total / 5 && closed_ticks[i] > total / 5);
+		total_passed += passed[i];
+	}
+	CHECK(total_passed > 0);                  /* someone walked through an open gate */
 	CHECK(!crushed);
+
+	/* A gate never closes on someone standing in it. */
+	Game h;
+	CHECK(h.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_WALLS));
+	T::StartPlaying(h);
+	T::ghosts(h).clear();
+	T::pac(h).Place(3, 9);                    /* in the left tunnel gate's cell */
+	bool closed_on_pac = false;
+	for (int t = 0; t < 20 * TICKS_PER_SEC; t++) {
+		Run(h, 1);
+		T::pac(h).Place(3, 9);
+		if (WallBlocks(h, 3, 9)) closed_on_pac = true;
+	}
+	CHECK(!closed_on_pac);
 }
 
-static void TestMovingDots()
+static void TestFleeingDots()
 {
-	printf("power dots wander only into cleared corridor cells\n");
+	printf("dots run away from Pac-Man\n");
 	srand(2);
-	Game g;
-	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_DOTS));
-	T::StartPlaying(g);
-	T::ghosts(g).clear();
-	Level& l = T::level(g);
-	/* Clear the dots around the top-left power dot. */
-	int pm = l.MarkAt(1, 2);
-	CHECK(pm >= 0 && l.GetMark(pm).type == CELL_POWER_MARK);
-	for (int i = 0; i < l.MarkCount(); i++)
-		if (l.GetMark(i).type == CELL_SIMPLE_MARK && l.GetMark(i).row <= 5) l.GetMark(i).eaten = true;
-	T::pac(g).Place(9, 15);
-	T::pac(g).dir = DIR_NONE;
-	bool moved = false, off_track = false, stacked = false;
-	for (int t = 0; t < 30 * TICKS_PER_SEC; t++) {
-		Run(g, 1);
-		const Mark& m = l.GetMark(pm);
-		if (m.col != 1 || m.row != 2) moved = true;
-		if (!l.IsTrack(m.col, m.row)) off_track = true;
-		for (int i = 0; i < l.MarkCount(); i++)
-			if (i != pm && !l.GetMark(i).eaten && l.GetMark(i).col == m.col && l.GetMark(i).row == m.row) stacked = true;
+	{
+		/* A power dot pushes past an ordinary dot. */
+		Game g;
+		CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_DOTS));
+		T::StartPlaying(g);
+		T::ghosts(g).clear();
+		Level& l = T::level(g);
+		int pm = l.MarkAt(1, 2), dot = l.MarkAt(1, 1);
+		CHECK(pm >= 0 && l.GetMark(pm).type == CELL_POWER_MARK && dot >= 0);
+		T::pac(g).Place(1, 4);                /* two cells below it */
+		Run(g, 3);
+		CHECK(l.GetMark(pm).col == 1 && l.GetMark(pm).row == 1);    /* fled up */
+		CHECK(l.GetMark(dot).col == 1 && l.GetMark(dot).row == 2);  /* swapped down */
+		CHECK(!l.GetMark(pm).eaten && !l.GetMark(dot).eaten);
 	}
-	CHECK(moved);
-	CHECK(!off_track);
-	CHECK(!stacked);
-	CHECK(!l.GetMark(pm).eaten);
+	{
+		/* Ordinary dots stay put while packed in, but run once there is room. */
+		Game g;
+		CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_DOTS));
+		T::StartPlaying(g);
+		T::ghosts(g).clear();
+		Level& l = T::level(g);
+		int d = l.MarkAt(6, 1);
+		T::pac(g).Place(4, 1);
+		Run(g, 30);
+		CHECK(l.GetMark(d).col == 6 && l.GetMark(d).row == 1);       /* boxed in by dots */
+		l.GetMark(l.MarkAt(7, 1)).eaten = true;                       /* clear a cell behind it */
+		Run(g, 30);
+		CHECK(l.GetMark(d).col == 7 && l.GetMark(d).row == 1);
+		/* No two live dots ever share a cell. */
+		bool stacked = false;
+		for (int i = 0; i < l.MarkCount(); i++)
+			for (int j = i + 1; j < l.MarkCount(); j++)
+				if (!l.GetMark(i).eaten && !l.GetMark(j).eaten &&
+				    l.GetMark(i).col == l.GetMark(j).col && l.GetMark(i).row == l.GetMark(j).row) stacked = true;
+		CHECK(!stacked);
+	}
+	{
+		/* Chasing a power dot takes longer when it runs. */
+		int took[2];
+		for (int flee = 0; flee <= 1; flee++) {
+			srand(5);
+			Game g;
+			CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, flee ? OPT_MOVING_DOTS : 0));
+			T::StartPlaying(g);
+			T::ghosts(g).clear();
+			Level& l = T::level(g);
+			int pm = l.MarkAt(1, 14);
+			T::pac(g).Place(9, 15);
+			took[flee] = 60 * TICKS_PER_SEC;
+			for (int t = 0; t < 60 * TICKS_PER_SEC; t++) {
+				if (T::pac(g).AtCenter()) T::wanted(g) = ChaseStep(g, l.GetMark(pm).col, l.GetMark(pm).row);
+				Run(g, 1);
+				if (l.GetMark(pm).eaten) { took[flee] = t; break; }
+			}
+		}
+		printf("    catching a power dot: %.1f s standing still, %.1f s running away\n",
+		       took[0] / (float)TICKS_PER_SEC, took[1] / (float)TICKS_PER_SEC);
+		CHECK(took[0] < 60 * TICKS_PER_SEC);
+		CHECK(took[1] > took[0] + TICKS_PER_SEC);
+	}
 }
 
 /* ---- multiplayer ---------------------------------------------------- */
@@ -513,7 +602,12 @@ static void TestTerrains()
 	m.hub.Pump();
 	CHECK(T::fright(c) > 0);
 	CHECK(T::fright(s) == 0);
-	m.Run(10 * TICKS_PER_SEC);               /* let the fright wear off */
+	/* Let the fright wear off, with the host's ghosts kept out of the way. */
+	for (int t = 0; t < 10 * TICKS_PER_SEC; t++) {
+		for (size_t i = 0; i < T::ghosts(c).size(); i++) T::ghosts(c)[i].Place(9, 3);
+		m.Run(1);
+	}
+	CHECK(T::terrain(s) == 2);
 
 	/* The host's ghost catches the visitor: it dies and goes home. */
 	T::wanted(s) = DIR_NONE;
@@ -556,8 +650,8 @@ int main()
 	TestOneLifePerDeath();
 	TestEatGhost();
 	TestCompleteSinglePlayer();
-	TestMovingWalls();
-	TestMovingDots();
+	TestGates();
+	TestFleeingDots();
 	TestMarkTransfers();
 	TestDotRace();
 	TestGhostTransfers();

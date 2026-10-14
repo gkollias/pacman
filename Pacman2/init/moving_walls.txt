@@ -1,5 +1,10 @@
-# Moving wall blocks (Pacman2): each patrols a straight run of empty cells.
-# start_col start_row axis(H|V) cells ms_per_cell
-6 11 H 7 600
-0 9 H 4 900
-15 9 H 4 900
+# Moving walls (Pacman2): gates that slide out of a wall to block a corridor
+# cell, then slide back and leave it open. They never close on anyone.
+#   col row  recess(U|D|L|R: the wall cell they hide in)  open_ms  closed_ms
+# Tunnel mouths
+3  9  U  4000 3000
+15 9  U  4000 3000
+# Corridors around the ghost house
+7  7  U  3000 2500
+11 7  U  3000 2500
+9  11 D  3500 3000

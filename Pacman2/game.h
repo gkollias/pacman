@@ -13,8 +13,8 @@ class Net;
 
 /* Optional features (the original's Read me lists them; all on by default). */
 enum Option {
-	OPT_MOVING_WALLS = 1,  /* wall blocks slide along empty corridors */
-	OPT_MOVING_DOTS  = 2,  /* power dots wander into cleared corridors */
+	OPT_MOVING_WALLS = 1,  /* gates open and close corridors */
+	OPT_MOVING_DOTS  = 2,  /* dots run away from Pac-Man */
 	OPT_TERRAINS     = 4,  /* LAN: the side tunnel leads to a neighbour's maze */
 	OPT_AUTO_SEND    = 8,  /* LAN: a cornered Pac-Man sends a ghost away */
 	OPT_ALL          = 15
@@ -45,19 +45,17 @@ struct Ghost : Actor {
 	int start_col, start_row;
 };
 
-/* A wall block patrolling a straight run of empty cells. While sliding
-   it blocks both the cell it left and the one it is entering. */
+/* A gate: a wall block that slides out of a wall cell (the recess) to
+   close a corridor cell, then slides back to open it again. It blocks
+   the corridor cell while closed or sliding. */
 struct MovingWall {
-	int col, row;            /* cell it is in (or entering) */
-	int from_col, from_row;  /* cell it is leaving while sliding */
-	int slide;               /* ticks of sliding left, 0 when still */
-	int start_col, start_row, dx, dy, span, pos, step;
-	int period, wait;
+	int col, row;        /* corridor cell it closes */
+	int rcol, rrow;      /* wall cell it hides in while open */
+	bool closed;
+	int slide;           /* ticks of sliding left, 0 when still */
+	int open_ticks, closed_ticks, wait;
 
-	bool Blocks(int c, int r) const
-	{
-		return (c == col && r == row) || (slide > 0 && c == from_col && r == from_row);
-	}
+	bool Blocks(int c, int r) const { return c == col && r == row && (closed || slide > 0); }
 };
 
 /* Another player's Pac-Man, as last reported. */
@@ -122,7 +120,7 @@ private:
 	int ghost_combo;
 	int schedule_index, schedule_ticks;
 	bool scatter;
-	int dot_move_ticks;
+	std::vector<int> dot_cooldown;   /* per mark: ticks until it may hop again */
 	int auto_send_cooldown;
 	int tick_count;
 	std::string notice;
@@ -166,7 +164,7 @@ private:
 	void GhostTarget(const Ghost& g, int& tc, int& tr) const;
 	void MoveWalls();
 	bool CellOccupied(int col, int row) const;
-	void MoveDots();
+	void FleeDots();
 
 	void EatAt(int col, int row);
 	void StartFright();

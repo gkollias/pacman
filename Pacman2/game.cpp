@@ -23,7 +23,9 @@ static const float PAC_SPEED[3]    = { 1.5f, 2.0f, 2.5f };    /* px per tick */
 static const float GHOST_FACTOR[3] = { 0.80f, 0.92f, 1.0f };  /* vs. Pac-Man */
 static const int   FRIGHT_SECS[3]  = { 8, 6, 4 };
 static const float RANDOM_TURN[3]  = { 0.30f, 0.10f, 0.0f };  /* chance of a random turn */
-static const int   DOT_MOVE_SECS[3] = { 6, 4, 3 };            /* power dots wander this often */
+static const int   FLEE_RADIUS[3]  = { 3, 4, 5 };             /* dots run when Pac-Man is this close */
+static const float FLEE_SLOWNESS[3] = { 1.8f, 1.35f, 1.12f }; /* a power dot hops a cell this much slower
+                                                                 than Pac-Man crosses one (ordinary: x2) */
 
 /* Alternating scatter / chase phases, in seconds; the last chase never ends. */
 static const int SCHEDULE[] = { 7, 20, 7, 20, 5 };
@@ -35,7 +37,7 @@ static const int LIVES = 4;            /* current life + 3 spare */
 static const int READY_TICKS = 2 * TICKS_PER_SEC;
 static const int DEATH_FRAME_TICKS = 8;
 static const int DEATH_TICKS = 6 * DEATH_FRAME_TICKS + TICKS_PER_SEC / 2;
-static const int WALL_SLIDE_TICKS = 12;
+static const int WALL_SLIDE_TICKS = 15;
 static const int CORNER_SCAN = 5;      /* cells a cornered Pac-Man looks ahead */
 static const int AUTO_SEND_COOLDOWN = 5 * TICKS_PER_SEC;
 static const int REMOTE_STALE = 15;    /* ticks before a silent remote Pac-Man is hidden */
@@ -62,7 +64,7 @@ Game::Game()
 	: net(NULL), difficulty(NORMAL), speed(MEDIUM), num_players(1), my_id(1), options(OPT_ALL),
 	  wanted(DIR_NONE), pac_anim(0), pac_terrain(1), remote_fright(0),
 	  phase(PHASE_READY), phase_ticks(0), fright_ticks(0), ghost_combo(0),
-	  schedule_index(0), schedule_ticks(0), scatter(true), dot_move_ticks(0),
+	  schedule_index(0), schedule_ticks(0), scatter(true),
 	  auto_send_cooldown(0), tick_count(0), notice_ticks(0),
 	  block_bmp(NULL), dead_bmp(NULL), life_bmp(NULL), blue_bmp(NULL), white_bmp(NULL),
 	  snd_dot(NULL), snd_ghost(NULL), snd_attack(NULL), snd_dead(NULL),
@@ -112,28 +114,29 @@ bool Game::LoadAssets()
 	return true;
 }
 
-/* init/moving_walls.txt: "start_col start_row H|V cells ms_per_cell" per line. */
+/* init/moving_walls.txt: "col row U|D|L|R open_ms closed_ms" per gate. */
 bool Game::LoadWalls(const std::string& path)
 {
 	FILE* fp = fopen(path.c_str(), "r");
 	if (!fp) return false;
 	char line[128];
 	while (fgets(line, sizeof(line), fp)) {
-		int col, row, span, ms;
-		char axis;
-		if (line[0] == '#' || sscanf(line, "%d %d %c %d %d", &col, &row, &axis, &span, &ms) != 5 || span < 2)
+		int col, row, open_ms, closed_ms;
+		char recess;
+		if (line[0] == '#' || sscanf(line, "%d %d %c %d %d", &col, &row, &recess, &open_ms, &closed_ms) != 5)
 			continue;
 		MovingWall w;
-		w.start_col = w.col = w.from_col = col;
-		w.start_row = w.row = w.from_row = row;
-		w.dx = axis == 'V' ? 0 : 1;
-		w.dy = axis == 'V' ? 1 : 0;
-		w.span = span;
-		w.pos = 0;
-		w.step = 1;
+		w.col = col;
+		w.row = row;
+		w.rcol = col + (recess == 'L' ? -1 : recess == 'R' ? 1 : 0);
+		w.rrow = row + (recess == 'U' ? -1 : recess == 'D' ? 1 : 0);
+		if (level.IsWall(w.col, w.row) || !level.IsWall(w.rcol, w.rrow)) continue;  /* bad entry */
+		w.closed = false;
 		w.slide = 0;
-		w.period = ms * TICKS_PER_SEC / 1000;
-		w.wait = w.period;
+		w.open_ticks = open_ms * TICKS_PER_SEC / 1000;
+		w.closed_ticks = closed_ms * TICKS_PER_SEC / 1000;
+		/* Stagger the gates so they don't all swing together. */
+		w.wait = w.open_ticks / 2 + (int)walls.size() * TICKS_PER_SEC * 7 / 10;
 		walls.push_back(w);
 	}
 	fclose(fp);
@@ -173,7 +176,7 @@ bool Game::Init(int _difficulty, int _speed, int _players, int _my_id, Net* _net
 	for (int c = 0; c < 4; c++)
 		AddGhost(c, my_id, GHOST_START[c][0], GHOST_START[c][1], GHOST_NORMAL);
 	ResetActors();
-	dot_move_ticks = DOT_MOVE_SECS[difficulty] * TICKS_PER_SEC;
+	dot_cooldown.assign(level.MarkCount(), 0);
 
 	/* With three players the fourth territory is shared out. */
 	if (net && net->IsServer() && num_players == 3)
@@ -458,54 +461,74 @@ bool Game::CellOccupied(int col, int row) const
 	return WallAt(walls, col, row);
 }
 
-/* Walls step one cell along their run, waiting while someone is in the way. */
+/* Gates alternate between open and closed. A gate only closes on an
+   empty cell; otherwise it stays open a little longer. */
 void Game::MoveWalls()
 {
 	for (size_t i = 0; i < walls.size(); i++) {
 		MovingWall& wl = walls[i];
 		if (wl.slide > 0) { wl.slide--; continue; }
 		if (wl.wait > 0) { wl.wait--; continue; }
-		int next = wl.pos + wl.step;
-		if (next < 0 || next >= wl.span) { wl.step = -wl.step; next = wl.pos + wl.step; }
-		int tc = wl.start_col + next * wl.dx, tr = wl.start_row + next * wl.dy;
-		if (CellOccupied(tc, tr)) {
-			/* Never crush anyone: turn around and try again shortly. */
-			wl.step = -wl.step;
-			wl.wait = TICKS_PER_SEC / 3;
-			continue;
+		if (wl.closed) {
+			wl.closed = false;
+			wl.slide = WALL_SLIDE_TICKS;
+			wl.wait = wl.open_ticks;
+		} else if (CellOccupied(wl.col, wl.row)) {
+			wl.wait = TICKS_PER_SEC / 4;  /* someone is in the way: never crush them */
+		} else {
+			wl.closed = true;
+			wl.slide = WALL_SLIDE_TICKS;
+			wl.wait = wl.closed_ticks;
 		}
-		wl.from_col = wl.col;
-		wl.from_row = wl.row;
-		wl.col = tc;
-		wl.row = tr;
-		wl.pos = next;
-		wl.slide = WALL_SLIDE_TICKS;
-		wl.wait = wl.period;
 	}
 }
 
-/* Power dots creep into neighbouring cleared corridor cells. Decided by
-   the server (or the only player) so every maze agrees. */
-void Game::MoveDots()
+/* My dots run away from my Pac-Man when it comes close: each hops to the
+   neighbouring corridor cell that is furthest from it. Power dots push
+   past ordinary dots (swapping places); ordinary dots only move into
+   cleared cells, so they get slippery once the maze thins out. Only the
+   owner moves its dots, and tells everyone with [MOVE_DOT]. */
+void Game::FleeDots()
 {
-	if (!Opt(OPT_MOVING_DOTS) || (net && !net->IsServer())) return;
-	if (--dot_move_ticks > 0) return;
-	dot_move_ticks = DOT_MOVE_SECS[difficulty] * TICKS_PER_SEC;
+	if (!Opt(OPT_MOVING_DOTS)) return;
+	int pc = level.WrapCol(pac.Col()), pr = pac.Row();
+	int w = level.Width();
 	for (int id = 0; id < level.MarkCount(); id++) {
+		if (dot_cooldown[id] > 0) { dot_cooldown[id]--; continue; }
 		Mark& m = level.GetMark(id);
-		if (m.eaten || m.type != CELL_POWER_MARK) continue;
-		int cand[4][2], n = 0;
+		if (m.eaten || m.owner != my_id) continue;
+		int dc = abs(m.col - pc), dist = (dc < w - dc ? dc : w - dc) + abs(m.row - pr);
+		if (dist == 0 || dist > FLEE_RADIUS[difficulty]) continue;
+
+		/* Neighbouring corridor cells strictly further from Pac-Man. */
+		int cand[4][3], n = 0, best_dist = dist;
 		for (int d = 0; d < 4; d++) {
 			int c = level.WrapCol(m.col + DIR_DX[d]), r = m.row + DIR_DY[d];
-			if (!level.IsTrack(c, r) || level.MarkAt(c, r) >= 0) continue;
-			if (!Away() && pac.Col() == c && pac.Row() == r) continue;
-			cand[n][0] = c; cand[n][1] = r; n++;
+			if (!level.IsTrack(c, r) || (c == pc && r == pr)) continue;
+			int other = level.MarkAt(c, r);
+			if (other >= 0 && (m.type != CELL_POWER_MARK || level.GetMark(other).type != CELL_SIMPLE_MARK))
+				continue;
+			int cc = abs(c - pc), nd = (cc < w - cc ? cc : w - cc) + abs(r - pr);
+			if (nd <= dist || nd < best_dist) continue;
+			if (nd > best_dist) { best_dist = nd; n = 0; }
+			cand[n][0] = c; cand[n][1] = r; cand[n][2] = other; n++;
 		}
-		if (n == 0) continue;
-		int k = rand() % n;
-		m.col = cand[k][0];
-		m.row = cand[k][1];
+		int pick = n > 0 ? rand() % n : -1;
+		int best_col = pick >= 0 ? cand[pick][0] : -1, best_row = pick >= 0 ? cand[pick][1] : -1;
+		int best_other = pick >= 0 ? cand[pick][2] : -1;
+		if (best_col < 0) continue;  /* cornered: catch it! */
+
+		if (best_other >= 0) {
+			Mark& o = level.GetMark(best_other);
+			o.col = m.col;
+			o.row = m.row;
+			Send("[MOVE_DOT %d %d %d]", best_other, o.col, o.row);
+		}
+		m.col = best_col;
+		m.row = best_row;
 		Send("[MOVE_DOT %d %d %d]", id, m.col, m.row);
+		float cell_ticks = TILE / PacSpeed();
+		dot_cooldown[id] = (int)(cell_ticks * FLEE_SLOWNESS[difficulty] * (m.type == CELL_POWER_MARK ? 1 : 2));
 	}
 }
 
@@ -749,7 +772,7 @@ void Game::Tick(const Input& in)
 		if (pac.AtCenter()) CheckCornered();
 		UpdateFright();
 		UpdateSchedule();
-		MoveDots();
+		FleeDots();
 		break;
 
 	case PHASE_DYING:
@@ -921,7 +944,7 @@ void Game::SendSnapshot()
 	s << "[SNAP " << my_id << " " << fright_ticks << " " << walls.size();
 	for (size_t i = 0; i < walls.size(); i++) {
 		const MovingWall& w = walls[i];
-		s << " " << w.col << " " << w.row << " " << w.from_col << " " << w.from_row << " " << w.slide;
+		s << " " << w.col << " " << w.row << " " << w.rcol << " " << w.rrow << " " << (int)w.closed << " " << w.slide;
 	}
 	s << " " << ghosts.size();
 	for (size_t i = 0; i < ghosts.size(); i++) {
@@ -935,16 +958,16 @@ void Game::SendSnapshot()
 
 void Game::ReadSnapshot(const std::vector<int>& a)
 {
-	/* a: terrain fright nwalls {col row from_col from_row slide}* nghosts {x y dir mode color label}* */
+	/* a: terrain fright nwalls {col row rcol rrow closed slide}* nghosts {x y dir mode color label}* */
 	size_t k = 1;
 	if (a.size() < 3) return;
 	remote_fright = a[k++];
 	int nw = a[k++];
 	remote_walls.clear();
-	for (int i = 0; i < nw && k + 5 <= a.size(); i++) {
+	for (int i = 0; i < nw && k + 6 <= a.size(); i++) {
 		MovingWall w;
 		memset(&w, 0, sizeof(w));
-		w.col = a[k++]; w.row = a[k++]; w.from_col = a[k++]; w.from_row = a[k++]; w.slide = a[k++];
+		w.col = a[k++]; w.row = a[k++]; w.rcol = a[k++]; w.rrow = a[k++]; w.closed = a[k++] != 0; w.slide = a[k++];
 		remote_walls.push_back(w);
 	}
 	if (k >= a.size()) return;
@@ -1125,12 +1148,11 @@ void Game::DrawWalls(BITMAP* buf, const std::vector<MovingWall>& ws)
 {
 	for (size_t i = 0; i < ws.size(); i++) {
 		const MovingWall& w = ws[i];
-		/* Slide smoothly from the old cell to the new one. */
-		int x = w.col * TILE, y = w.row * TILE;
-		if (w.slide > 0) {
-			x += (w.from_col - w.col) * TILE * w.slide / WALL_SLIDE_TICKS;
-			y += (w.from_row - w.row) * TILE * w.slide / WALL_SLIDE_TICKS;
-		}
+		/* How far out of its wall the gate is, in sixteenths. */
+		int out = w.closed ? 16 - 16 * w.slide / WALL_SLIDE_TICKS : 16 * w.slide / WALL_SLIDE_TICKS;
+		if (out <= 0) continue;  /* fully open: hidden in the wall */
+		int x = w.rcol * TILE + (w.col - w.rcol) * TILE * out / 16;
+		int y = w.rrow * TILE + (w.row - w.rrow) * TILE * out / 16;
 		DrawSprite(buf, block_bmp, 0, 0, x, y);
 	}
 }

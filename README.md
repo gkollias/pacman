@@ -42,8 +42,10 @@ Hosting a LAN game makes macOS ask once whether Pacman may accept incoming conne
 - When a player loses or leaves, their dots are shared among the others; if the server goes
   away, clients finish the game on their own.
 - Optional features (Options menu, all on by default; the host's choice applies to everyone):
-  - moving walls: blocks slide along the empty corridors (`init/moving_walls.txt`);
-  - moving power dots: they wander into corridors you have already cleared;
+  - gates: blocks slide out of the walls to close a corridor for a few seconds, then open it
+    again (positions and timings in `init/moving_walls.txt`);
+  - running dots: power dots flee from Pac-Man (pushing past other dots), and ordinary dots flee
+    into corridors you have already cleared, so the last dots of a level are slippery;
   - terrains (LAN): the side tunnel leads into the next player's maze, where their ghosts
     hunt you; ghosts can wander over too;
   - cornered (LAN): when ghosts block every way out, the nearest one is sent to the next player.

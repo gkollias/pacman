@@ -61,7 +61,7 @@ static int Menu(const char* title, const char* const* options, int count, int se
 static int OptionsMenu(int options)
 {
 	static const char* const NAMES[] = {
-		"Moving walls", "Moving power dots",
+		"Gates that open and close", "Dots run away from Pac-Man",
 		"Tunnel leads to the next player's maze (LAN)", "Cornered: send a ghost away (LAN)",
 	};
 	static const int FLAGS[] = { OPT_MOVING_WALLS, OPT_MOVING_DOTS, OPT_TERRAINS, OPT_AUTO_SEND };
