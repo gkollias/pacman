@@ -1,5 +1,5 @@
 build/
-pacman
-logic_test
+/pacman
+/logic_test
 Pacman.app/
 web/

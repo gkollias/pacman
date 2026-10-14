@@ -57,7 +57,7 @@
     canvas.focus();
   });
   canvas.addEventListener('blur', function () {
-    if (ready) { statusEl.textContent = 'Paused focus'; hintEl.textContent = 'Click to keep playing'; overlay.hidden = false; }
+    if (ready) { statusEl.textContent = 'Click to keep playing'; hintEl.textContent = 'The game needs keyboard focus'; overlay.hidden = false; }
   });
 
   var Module = {
