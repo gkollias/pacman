@@ -40,6 +40,9 @@ public:
 	int WrapCol(int col) const;
 	const Cell& At(int col, int row) const { return cells[row * width + WrapCol(col)]; }
 	bool IsWall(int col, int row) const;
+	/* Turns a wall cell into open floor (moving obstacles take their cells
+	   out of the static maze). */
+	void ClearWall(int col, int row) { cells[row * width + WrapCol(col)].type = CELL_EMPTY; }
 
 	/* The ghost house: only ghosts going home or leaving may pass the door. */
 	bool IsDoor(int col, int row) const { return WrapCol(col) == DoorCol() && row == DoorRow(); }

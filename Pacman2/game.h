@@ -13,7 +13,7 @@ class Net;
 
 /* Optional features (the original's Read me lists them; all on by default). */
 enum Option {
-	OPT_MOVING_WALLS = 1,  /* gates open and close corridors */
+	OPT_MOVING_WALLS = 1,  /* blocks of the maze slide back and forth */
 	OPT_MOVING_DOTS  = 2,  /* dots run away from Pac-Man */
 	OPT_TERRAINS     = 4,  /* LAN: the side tunnel leads to a neighbour's maze */
 	OPT_AUTO_SEND    = 8,  /* LAN: a cornered Pac-Man sends a ghost away */
@@ -45,17 +45,17 @@ struct Ghost : Actor {
 	int start_col, start_row;
 };
 
-/* A gate: a wall block that slides out of a wall cell (the recess) to
-   close a corridor cell, then slides back to open it again. It blocks
-   the corridor cell while closed or sliding. */
+/* A free-standing block of the maze that slides as a whole by (dx, dy)
+   cells and back. While moved, its home cells are open floor. While
+   sliding it blocks both its home cells and the cells it moves into. */
 struct MovingWall {
-	int col, row;        /* corridor cell it closes */
-	int rcol, rrow;      /* wall cell it hides in while open */
-	bool closed;
+	std::vector<int> cols, rows, tiles;  /* its cells at home, and their wall tiles */
+	int dx, dy;
+	bool moved;
 	int slide;           /* ticks of sliding left, 0 when still */
-	int open_ticks, closed_ticks, wait;
+	int home_ticks, moved_ticks, wait;
 
-	bool Blocks(int c, int r) const { return c == col && r == row && (closed || slide > 0); }
+	bool Blocks(int c, int r) const;
 };
 
 /* Another player's Pac-Man, as last reported. */
@@ -128,7 +128,6 @@ private:
 
 	/* bitmaps */
 	BITMAP* wall_bmp[15];
-	BITMAP* block_bmp;
 	BITMAP* pac_bmp[4];
 	BITMAP* dead_bmp;
 	BITMAP* life_bmp;

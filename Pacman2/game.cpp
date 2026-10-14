@@ -66,7 +66,7 @@ Game::Game()
 	  phase(PHASE_READY), phase_ticks(0), fright_ticks(0), ghost_combo(0),
 	  schedule_index(0), schedule_ticks(0), scatter(true),
 	  auto_send_cooldown(0), tick_count(0), notice_ticks(0),
-	  block_bmp(NULL), dead_bmp(NULL), life_bmp(NULL), blue_bmp(NULL), white_bmp(NULL),
+	  dead_bmp(NULL), life_bmp(NULL), blue_bmp(NULL), white_bmp(NULL),
 	  snd_dot(NULL), snd_ghost(NULL), snd_attack(NULL), snd_dead(NULL),
 	  dot_voice(-1), attack_playing(false)
 {
@@ -92,7 +92,6 @@ bool Game::LoadAssets()
 		for (int c = 0; c < 4; c++)
 			if (!(ghost_bmp[c][d] = Load(std::string("./images/ghosts/") + GHOST_NAMES[c] + "_" + DIR_NAME[d] + ".bmp"))) return false;
 	}
-	block_bmp = Load("./images/obstacles/obstacle.bmp");
 	dead_bmp = Load("./images/pacman/dead_pacman.bmp");
 	life_bmp = Load("./images/pacman/life.bmp");
 	blue_bmp = Load("./images/ghosts/blue_ghost.bmp");
@@ -101,7 +100,7 @@ bool Game::LoadAssets()
 	mark_bmp[1] = Load("./images/marks/power_mark.bmp");
 	team_mark_bmp[0] = Load("./images/marks/teammate_simple_mark.bmp");
 	team_mark_bmp[1] = Load("./images/marks/teammate_power_mark.bmp");
-	if (!block_bmp || !dead_bmp || !life_bmp || !blue_bmp || !white_bmp || !mark_bmp[0] ||
+	if (!dead_bmp || !life_bmp || !blue_bmp || !white_bmp || !mark_bmp[0] ||
 	    !mark_bmp[1] || !team_mark_bmp[0] || !team_mark_bmp[1])
 		return false;
 
@@ -114,29 +113,56 @@ bool Game::LoadAssets()
 	return true;
 }
 
-/* init/moving_walls.txt: "col row U|D|L|R open_ms closed_ms" per gate. */
+bool MovingWall::Blocks(int c, int r) const
+{
+	for (size_t k = 0; k < cols.size(); k++) {
+		if ((!moved || slide > 0) && c == cols[k] && r == rows[k]) return true;
+		if ((moved || slide > 0) && c == cols[k] + dx && r == rows[k] + dy) return true;
+	}
+	return false;
+}
+
+/* init/moving_walls.txt: "col row width height dx dy ms_at_home ms_moved"
+   per block. The block must be a free-standing piece of wall, and the
+   cells it moves into must be corridor. */
 bool Game::LoadWalls(const std::string& path)
 {
 	FILE* fp = fopen(path.c_str(), "r");
 	if (!fp) return false;
-	char line[128];
+	char line[160];
 	while (fgets(line, sizeof(line), fp)) {
-		int col, row, open_ms, closed_ms;
-		char recess;
-		if (line[0] == '#' || sscanf(line, "%d %d %c %d %d", &col, &row, &recess, &open_ms, &closed_ms) != 5)
+		int col, row, bw, bh, dx, dy, home_ms, moved_ms;
+		if (line[0] == '#' ||
+		    sscanf(line, "%d %d %d %d %d %d %d %d", &col, &row, &bw, &bh, &dx, &dy, &home_ms, &moved_ms) != 8 ||
+		    bw < 1 || bh < 1 || (dx == 0 && dy == 0))
 			continue;
 		MovingWall w;
-		w.col = col;
-		w.row = row;
-		w.rcol = col + (recess == 'L' ? -1 : recess == 'R' ? 1 : 0);
-		w.rrow = row + (recess == 'U' ? -1 : recess == 'D' ? 1 : 0);
-		if (level.IsWall(w.col, w.row) || !level.IsWall(w.rcol, w.rrow)) continue;  /* bad entry */
-		w.closed = false;
+		bool ok = true;
+		for (int r = row; r < row + bh; r++)
+			for (int c = col; c < col + bw; c++) {
+				if (!level.IsWall(c, r)) ok = false;
+				w.cols.push_back(c);
+				w.rows.push_back(r);
+				w.tiles.push_back(level.IsWall(c, r) ? level.At(c, r).wall_tile : 0);
+			}
+		for (size_t k = 0; k < w.cols.size() && ok; k++) {
+			int c = w.cols[k] + dx, r = w.rows[k] + dy;
+			bool own = c >= col && c < col + bw && r >= row && r < row + bh;
+			if (!own && (level.IsWall(c, r) || level.IsDoor(c, r) || level.InHouse(c, r))) ok = false;
+		}
+		if (!ok) {
+			fprintf(stderr, "%s: ignoring block at %d,%d (not free-standing or no room to move)\n", path.c_str(), col, row);
+			continue;
+		}
+		for (size_t k = 0; k < w.cols.size(); k++) level.ClearWall(w.cols[k], w.rows[k]);
+		w.dx = dx;
+		w.dy = dy;
+		w.moved = false;
 		w.slide = 0;
-		w.open_ticks = open_ms * TICKS_PER_SEC / 1000;
-		w.closed_ticks = closed_ms * TICKS_PER_SEC / 1000;
-		/* Stagger the gates so they don't all swing together. */
-		w.wait = w.open_ticks / 2 + (int)walls.size() * TICKS_PER_SEC * 7 / 10;
+		w.home_ticks = home_ms * TICKS_PER_SEC / 1000;
+		w.moved_ticks = moved_ms * TICKS_PER_SEC / 1000;
+		/* Stagger the blocks so they don't all move together. */
+		w.wait = w.home_ticks / 2 + (int)walls.size() * TICKS_PER_SEC * 7 / 10;
 		walls.push_back(w);
 	}
 	fclose(fp);
@@ -447,7 +473,7 @@ void Game::MoveGhost(size_t i)
 	}
 }
 
-/* Is any actor in my maze (or a sliding wall) in this cell? */
+/* Is any actor in my maze in this cell? */
 bool Game::CellOccupied(int col, int row) const
 {
 	int w = level.Width();
@@ -458,28 +484,30 @@ bool Game::CellOccupied(int col, int row) const
 		if (it->second.terrain == my_id && it->second.age <= REMOTE_STALE &&
 		    BoxCovers(it->second.x, it->second.y, col, row, w))
 			return true;
-	return WallAt(walls, col, row);
+	return false;
 }
 
-/* Gates alternate between open and closed. A gate only closes on an
-   empty cell; otherwise it stays open a little longer. */
+/* Blocks slide away and back on a timer. A block only moves when the
+   cells it is about to take are empty; otherwise it waits (it never
+   crushes anyone). */
 void Game::MoveWalls()
 {
 	for (size_t i = 0; i < walls.size(); i++) {
 		MovingWall& wl = walls[i];
 		if (wl.slide > 0) { wl.slide--; continue; }
 		if (wl.wait > 0) { wl.wait--; continue; }
-		if (wl.closed) {
-			wl.closed = false;
-			wl.slide = WALL_SLIDE_TICKS;
-			wl.wait = wl.open_ticks;
-		} else if (CellOccupied(wl.col, wl.row)) {
-			wl.wait = TICKS_PER_SEC / 4;  /* someone is in the way: never crush them */
-		} else {
-			wl.closed = true;
-			wl.slide = WALL_SLIDE_TICKS;
-			wl.wait = wl.closed_ticks;
+		/* Cells it will take: the moved position when leaving, home when returning. */
+		int sx = wl.moved ? 0 : wl.dx, sy = wl.moved ? 0 : wl.dy;
+		bool blocked = false;
+		for (size_t k = 0; k < wl.cols.size() && !blocked; k++)
+			if (CellOccupied(wl.cols[k] + sx, wl.rows[k] + sy)) blocked = true;
+		if (blocked) {
+			wl.wait = TICKS_PER_SEC / 4;  /* someone is in the way: try again shortly */
+			continue;
 		}
+		wl.moved = !wl.moved;
+		wl.slide = WALL_SLIDE_TICKS;
+		wl.wait = wl.moved ? wl.moved_ticks : wl.home_ticks;
 	}
 }
 
@@ -504,7 +532,7 @@ void Game::FleeDots()
 		int cand[4][3], n = 0, best_dist = dist;
 		for (int d = 0; d < 4; d++) {
 			int c = level.WrapCol(m.col + DIR_DX[d]), r = m.row + DIR_DY[d];
-			if (!level.IsTrack(c, r) || (c == pc && r == pr)) continue;
+			if (!level.IsTrack(c, r) || (c == pc && r == pr) || WallAt(Away() ? remote_walls : walls, c, r)) continue;
 			int other = level.MarkAt(c, r);
 			if (other >= 0 && (m.type != CELL_POWER_MARK || level.GetMark(other).type != CELL_SIMPLE_MARK))
 				continue;
@@ -943,8 +971,7 @@ void Game::SendSnapshot()
 	std::ostringstream s;
 	s << "[SNAP " << my_id << " " << fright_ticks << " " << walls.size();
 	for (size_t i = 0; i < walls.size(); i++) {
-		const MovingWall& w = walls[i];
-		s << " " << w.col << " " << w.row << " " << w.rcol << " " << w.rrow << " " << (int)w.closed << " " << w.slide;
+		s << " " << (int)walls[i].moved << " " << walls[i].slide;
 	}
 	s << " " << ghosts.size();
 	for (size_t i = 0; i < ghosts.size(); i++) {
@@ -958,17 +985,19 @@ void Game::SendSnapshot()
 
 void Game::ReadSnapshot(const std::vector<int>& a)
 {
-	/* a: terrain fright nwalls {col row rcol rrow closed slide}* nghosts {x y dir mode color label}* */
+	/* a: terrain fright nwalls {moved slide}* nghosts {x y dir mode color label}*
+	   Every maze has the same blocks (init/moving_walls.txt); only their
+	   positions are sent. */
 	size_t k = 1;
 	if (a.size() < 3) return;
 	remote_fright = a[k++];
 	int nw = a[k++];
-	remote_walls.clear();
-	for (int i = 0; i < nw && k + 6 <= a.size(); i++) {
-		MovingWall w;
-		memset(&w, 0, sizeof(w));
-		w.col = a[k++]; w.row = a[k++]; w.rcol = a[k++]; w.rrow = a[k++]; w.closed = a[k++] != 0; w.slide = a[k++];
-		remote_walls.push_back(w);
+	remote_walls = walls;
+	for (int i = 0; i < nw && k + 2 <= a.size(); i++, k += 2) {
+		if (i >= (int)remote_walls.size()) continue;
+		remote_walls[i].moved = a[k] != 0;
+		remote_walls[i].slide = a[k + 1];
+		remote_walls[i].wait = 0;
 	}
 	if (k >= a.size()) return;
 	int ng = a[k++];
@@ -1148,12 +1177,14 @@ void Game::DrawWalls(BITMAP* buf, const std::vector<MovingWall>& ws)
 {
 	for (size_t i = 0; i < ws.size(); i++) {
 		const MovingWall& w = ws[i];
-		/* How far out of its wall the gate is, in sixteenths. */
-		int out = w.closed ? 16 - 16 * w.slide / WALL_SLIDE_TICKS : 16 * w.slide / WALL_SLIDE_TICKS;
-		if (out <= 0) continue;  /* fully open: hidden in the wall */
-		int x = w.rcol * TILE + (w.col - w.rcol) * TILE * out / 16;
-		int y = w.rrow * TILE + (w.row - w.rrow) * TILE * out / 16;
-		DrawSprite(buf, block_bmp, 0, 0, x, y);
+		/* How far it has slid towards its moved position, in sixteenths. */
+		int out = w.moved ? 16 - 16 * w.slide / WALL_SLIDE_TICKS : 16 * w.slide / WALL_SLIDE_TICKS;
+		int ox = w.dx * TILE * out / 16, oy = w.dy * TILE * out / 16;
+		for (size_t k = 0; k < w.cols.size(); k++) {
+			int t = w.tiles[k];
+			if (t > 0 && t < 15)
+				blit(wall_bmp[t], buf, 0, 0, ORIGIN_X + w.cols[k] * TILE + ox, ORIGIN_Y + w.rows[k] * TILE + oy, TILE, TILE);
+		}
 	}
 }
 
@@ -1168,9 +1199,10 @@ void Game::Draw(BITMAP* buf, int fps)
 			if (cell.type == CELL_WALL && cell.wall_tile > 0 && cell.wall_tile < 15)
 				blit(wall_bmp[cell.wall_tile], buf, 0, 0, ORIGIN_X + c * TILE, ORIGIN_Y + r * TILE, TILE, TILE);
 		}
+	const std::vector<MovingWall>& view_walls = Away() ? remote_walls : walls;
 	for (int i = 0; i < level.MarkCount(); i++) {
 		const Mark& m = level.GetMark(i);
-		if (m.eaten) continue;
+		if (m.eaten || WallAt(view_walls, m.col, m.row)) continue;  /* hidden under a block */
 		int kind = m.type == CELL_POWER_MARK ? 1 : 0;
 		BITMAP* b = m.owner == my_id ? mark_bmp[kind] : team_mark_bmp[kind];
 		masked_blit(b, buf, 0, 0, ORIGIN_X + m.col * TILE + (TILE - b->w) / 2,
@@ -1178,7 +1210,7 @@ void Game::Draw(BITMAP* buf, int fps)
 	}
 
 	/* The maze my Pac-Man is in: my own, or the one it is visiting. */
-	DrawWalls(buf, Away() ? remote_walls : walls);
+	DrawWalls(buf, view_walls);
 	if (phase != PHASE_DYING) DrawGhosts(buf, Away() ? remote_ghosts : ghosts, Away() ? remote_fright : fright_ticks);
 
 	for (std::map<int, RemotePac>::const_iterator it = remote_pacs.begin(); it != remote_pacs.end(); ++it) {

@@ -251,58 +251,78 @@ static void TestCompleteSinglePlayer()
 	CHECK(T::phase(g) == PHASE_COMPLETED);
 }
 
-static void TestGates()
+static bool AnyoneIn(Game& g, int c, int r)
 {
-	printf("gates open and close passages, never on anyone\n");
+	int w = T::level(g).Width();
+	if (BoxOverlapsCell(T::pac(g).x, T::pac(g).y, c, r, w)) return true;
+	for (size_t j = 0; j < T::ghosts(g).size(); j++)
+		if (BoxOverlapsCell(T::ghosts(g)[j].x, T::ghosts(g)[j].y, c, r, w)) return true;
+	return false;
+}
+
+static void TestMovingObstacles()
+{
+	printf("maze blocks slide away and back, never onto anyone\n");
 	srand(1);
 	Game g;
 	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_WALLS));
 	std::vector<MovingWall>& ws = T::walls(g);
-	CHECK(ws.size() == 5);
+	CHECK(ws.size() == 6);
+	/* The blocks are taken out of the static maze but still block at home. */
+	CHECK(!T::level(g).IsWall(2, 2) && WallBlocks(g, 2, 2) && !WallBlocks(g, 2, 1));
 	T::StartPlaying(g);
 	T::me(g).lives = 1000;   /* keep playing through deaths */
 	static const Dir DIRS[4] = { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
-	int w = T::level(g).Width();
-	std::vector<int> open_ticks(ws.size(), 0), closed_ticks(ws.size(), 0), passed(ws.size(), 0);
+	std::vector<int> home(ws.size(), 0), moved(ws.size(), 0);
+	int through_opened = 0, through_freed = 0;
 	bool crushed = false;
-	const int TICKS = 180 * TICKS_PER_SEC;
-	for (int t = 0; t < TICKS; t++) {
+	for (int t = 0; t < 240 * TICKS_PER_SEC; t++) {
 		if (t % 30 == 0) T::wanted(g) = DIRS[rand() % 4];  /* wander about */
 		Run(g, 1);
 		if (T::phase(g) != PHASE_PLAYING) continue;
 		for (size_t i = 0; i < ws.size(); i++) {
-			bool blocks = ws[i].Blocks(ws[i].col, ws[i].row);
-			(blocks ? closed_ticks : open_ticks)[i]++;
-			bool someone = BoxOverlapsCell(T::pac(g).x, T::pac(g).y, ws[i].col, ws[i].row, w);
-			for (size_t j = 0; j < T::ghosts(g).size(); j++)
-				if (BoxOverlapsCell(T::ghosts(g)[j].x, T::ghosts(g)[j].y, ws[i].col, ws[i].row, w)) someone = true;
-			if (someone && blocks && ws[i].slide == 0 && ws[i].closed) crushed = true;
-			if (someone && !blocks) passed[i]++;
+			const MovingWall& w = ws[i];
+			(w.moved ? moved : home)[i]++;
+			for (size_t k = 0; k < w.cols.size(); k++) {
+				int hc = w.cols[k], hr = w.rows[k], mc = hc + w.dx, mr = hr + w.dy;
+				if (w.Blocks(hc, hr) && AnyoneIn(g, hc, hr)) crushed = true;
+				if (w.Blocks(mc, mr) && AnyoneIn(g, mc, mr)) crushed = true;
+				if (!w.Blocks(hc, hr) && AnyoneIn(g, hc, hr)) through_opened++;  /* where the block was */
+				if (!w.Blocks(mc, mr) && AnyoneIn(g, mc, mr)) through_freed++;   /* where it goes */
+			}
 		}
 	}
-	int total_passed = 0;
 	for (size_t i = 0; i < ws.size(); i++) {
-		int total = open_ticks[i] + closed_ticks[i];
-		/* Each gate spends a fair share of the time open and closed. */
-		CHECK(open_ticks[i] > total / 5 && closed_ticks[i] > total / 5);
-		total_passed += passed[i];
+		int total = home[i] + moved[i];
+		CHECK(home[i] > total / 5 && moved[i] > total / 5);
 	}
-	CHECK(total_passed > 0);                  /* someone walked through an open gate */
+	CHECK(through_opened > 0);   /* the passage a block leaves behind gets used */
+	CHECK(through_freed > 0);    /* and so does the corridor it gives back */
 	CHECK(!crushed);
 
-	/* A gate never closes on someone standing in it. */
+	/* A block waits while someone stands where it wants to go. */
 	Game h;
 	CHECK(h.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_WALLS));
 	T::StartPlaying(h);
 	T::ghosts(h).clear();
-	T::pac(h).Place(3, 9);                    /* in the left tunnel gate's cell */
-	bool closed_on_pac = false;
+	bool moved_onto_pac = false;
 	for (int t = 0; t < 20 * TICKS_PER_SEC; t++) {
+		T::pac(h).Place(2, 1);                /* where the top-left block slides to */
 		Run(h, 1);
-		T::pac(h).Place(3, 9);
-		if (WallBlocks(h, 3, 9)) closed_on_pac = true;
+		if (T::walls(h)[0].moved || T::walls(h)[0].slide > 0) moved_onto_pac = true;
 	}
-	CHECK(!closed_on_pac);
+	CHECK(!moved_onto_pac);
+	T::pac(h).Place(9, 15);                   /* step aside: now it moves */
+	bool moved_after = false;
+	for (int t = 0; t < 10 * TICKS_PER_SEC && !moved_after; t++) {
+		T::pac(h).Place(9, 15);
+		Run(h, 1);
+		moved_after = T::walls(h)[0].moved;
+	}
+	CHECK(moved_after);
+	/* The dots it covered are hidden, not eaten ((2,1) was eaten by the
+	   Pac-Man pinned there, (3,1) wasn't). */
+	CHECK(T::level(h).MarkAt(3, 1) >= 0 && WallBlocks(h, 3, 1));
 }
 
 static void TestFleeingDots()
@@ -650,7 +670,7 @@ int main()
 	TestOneLifePerDeath();
 	TestEatGhost();
 	TestCompleteSinglePlayer();
-	TestGates();
+	TestMovingObstacles();
 	TestFleeingDots();
 	TestMarkTransfers();
 	TestDotRace();

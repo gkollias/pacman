@@ -1,10 +1,13 @@
-# Moving walls (Pacman2): gates that slide out of a wall to block a corridor
-# cell, then slide back and leave it open. They never close on anyone.
-#   col row  recess(U|D|L|R: the wall cell they hide in)  open_ms  closed_ms
-# Tunnel mouths
-3  9  U  4000 3000
-15 9  U  4000 3000
-# Corridors around the ghost house
-7  7  U  3000 2500
-11 7  U  3000 2500
-9  11 D  3500 3000
+# Moving obstacles (Pacman2): free-standing wall blocks of the maze that
+# slide as a whole by (dx, dy) cells, stay there a while, then slide back.
+# Moving away closes the corridor they move into and opens a passage where
+# they were. A block never moves onto anyone: it waits until the way is clear.
+#   col row width height  dx dy  ms_at_home ms_moved
+# Top row: the outer blocks slide up, the middle ones down.
+2  2   2 1   0 -1   4000 3000
+15 2   2 1   0 -1   4600 3000
+5  2   3 1   0  1   5200 3500
+11 2   3 1   0  1   3600 3500
+# Lower half: the blocks above the starting row slide down into it.
+5  14  3 1   0  1   4300 3200
+11 14  3 1   0  1   5500 3200
