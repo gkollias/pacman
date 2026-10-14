@@ -60,8 +60,12 @@
     if (ready) { statusEl.textContent = 'Click to keep playing'; hintEl.textContent = 'The game needs keyboard focus'; overlay.hidden = false; }
   });
 
+  /* Each build loads its own files: browsers can't mix a new page with
+     a cached old game. (make web fills in the build id.) */
+  var BUILD_ID = '__BUILD_ID__';
   var Module = {
     canvas: canvas,
+    locateFile: function (path) { return path + '?v=' + BUILD_ID; },
     setStatus: function (text) {
       if (ready) return;
       var m = text.match(/\((\d+(\.\d+)?)\/(\d+)\)/);

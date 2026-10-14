@@ -61,6 +61,10 @@ WEB_FLAGS = -std=c++11 -O2 -I$(COMPAT) --use-port=sdl3 -sASYNCIFY -sALLOW_MEMORY
 web: $(SRCS) $(COMPAT)/allegro_compat.cpp $(wildcard *.h) $(COMPAT)/allegro.h web_shell.html
 	@mkdir -p $(WEB_OUT)
 	$(EMXX) $(WEB_FLAGS) $(SRCS) $(COMPAT)/allegro_compat.cpp -o $(WEB_OUT)/index.html
+	@# Version the game files so a new deploy never mixes with cached old ones.
+	@id=$$(git rev-parse --short HEAD 2>/dev/null || echo dev)-$$(date +%s); \
+	sed -i.bak -E -e "s/__BUILD_ID__/$$id/" -e "s#src=\"?index\.js\"?#src=\"index.js?v=$$id\"#" $(WEB_OUT)/index.html && \
+	rm -f $(WEB_OUT)/index.html.bak && echo "web build $$id"
 
 serve: web
 	python3 -m http.server 8080 --directory $(WEB_OUT)
