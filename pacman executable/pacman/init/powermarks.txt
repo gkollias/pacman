@@ -1,0 +1,4 @@
+113 52 ./images/power_mark.bmp
+512 52 ./images/power_mark.bmp
+113 318 ./images/power_mark.bmp
+512 318 ./images/power_mark.bmp

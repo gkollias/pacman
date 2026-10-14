@@ -1,0 +1,17 @@
+	BITMAP* pac = load_bitmap("pacman.bmp",NULL);
+	if (pac == NULL)
+		textprintf_ex(screen, font, 10, 10, makecol(255, 255, 255), -1, "ton ipame!!!");
+	else
+	{
+		textprintf_ex(screen, font, 10, 10, makecol(255, 255, 255), -1, "ggggggggggggggggggggggggggggggggggggg!!!");
+	BITMAP* up = create_sub_bitmap(pac, 0, 0, 20, 60);
+	BITMAP* right = create_sub_bitmap(pac, 20, 0, 20, 60);
+	BITMAP* down = create_sub_bitmap(pac, 40, 0, 20, 60);
+	BITMAP* left= create_sub_bitmap(pac, 60, 0, 20, 60);
+textprintf_ex(screen, font, 120, 10, makecol(255, 255, 255), -1, "aaaasdasasasasasas!!!");
+	save_bitmap("up.bmp", up, NULL);
+	save_bitmap("right.bmp", right, NULL);
+	save_bitmap("down.bmp", down, NULL);
+	save_bitmap("left.bmp", left, NULL);
+	destroy_bitmap(pac);destroy_bitmap(up);destroy_bitmap(down);destroy_bitmap(left);destroy_bitmap(right);
+	}
