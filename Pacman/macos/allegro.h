@@ -29,6 +29,7 @@ void allegro_message(const char* fmt, ...);
 /* Timer units are microseconds here (Allegro uses 1193181 Hz ticks). */
 #define MSEC_TO_TIMER(x) ((long)(x) * 1000L)
 #define SECS_TO_TIMER(x) ((long)(x) * 1000000L)
+#define BPS_TO_TIMER(x)  (1000000L / (long)(x))
 int  install_timer(void);
 int  install_int_ex(void (*proc)(void), long speed);
 void rest(unsigned int ms);
@@ -97,6 +98,24 @@ extern const KeyArray key;
 #define KEY_L     SDL_SCANCODE_L
 #define KEY_1     SDL_SCANCODE_1
 #define KEY_2     SDL_SCANCODE_2
+#define KEY_3     SDL_SCANCODE_3
+#define KEY_4     SDL_SCANCODE_4
+#define KEY_5     SDL_SCANCODE_5
+#define KEY_6     SDL_SCANCODE_6
+#define KEY_7     SDL_SCANCODE_7
+#define KEY_8     SDL_SCANCODE_8
+#define KEY_9     SDL_SCANCODE_9
+#define KEY_0     SDL_SCANCODE_0
+#define KEY_STOP  SDL_SCANCODE_PERIOD
+#define KEY_BACKSPACE SDL_SCANCODE_BACKSPACE
+#define KEY_ENTER_PAD SDL_SCANCODE_KP_ENTER
+#define KEY_C     SDL_SCANCODE_C
+#define KEY_D     SDL_SCANCODE_D
+#define KEY_F     SDL_SCANCODE_F
+#define KEY_G     SDL_SCANCODE_G
+#define KEY_H     SDL_SCANCODE_H
+#define KEY_V     SDL_SCANCODE_V
+#define KEY_MAX   SDL_SCANCODE_COUNT
 
 /* ---- sound --------------------------------------------------------- */
 typedef struct SAMPLE SAMPLE;
