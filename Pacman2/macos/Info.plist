@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Pacman</string>
+	<key>CFBundleDisplayName</key>
+	<string>Pacman</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.gkollias.pacman</string>
+	<key>CFBundleExecutable</key>
+	<string>Pacman</string>
+	<key>CFBundleIconFile</key>
+	<string>Pacman</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>2.0</string>
+	<key>CFBundleVersion</key>
+	<string>2.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.arcade-games</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Pacman by George Kollias (University of Crete, 2006-2008).</string>
+</dict>
+</plist>

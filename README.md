@@ -24,6 +24,15 @@ SDL3 compatibility layer in `Pacman/macos/`.
 cd Pacman2 && make run
 ```
 
+To build a double-clickable `Pacman2/Pacman.app` (self-contained: SDL3 and all assets are bundled,
+ad-hoc signed, Apple Silicon):
+
+```bash
+cd Pacman2 && make app
+```
+
+Hosting a LAN game makes macOS ask once whether Pacman may accept incoming connections.
+
 - Menus: single player / host (server) / join (client), then difficulty and speed.
 - Up to 4 players on a LAN (TCP port 10000). The maze is split into territories; your dots are
   yellow, teammates' are red. The team wins when every dot is eaten.

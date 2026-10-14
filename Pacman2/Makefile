@@ -28,6 +28,27 @@ $(OBJDIR)/allegro_compat.o: $(COMPAT)/allegro_compat.cpp $(COMPAT)/allegro.h $(C
 run: pacman
 	./pacman
 
+# Double-clickable app: assets in Resources, SDL3 bundled in Frameworks,
+# ad-hoc signed. (Apple Silicon, like the Homebrew SDL3 it bundles.)
+APP = Pacman.app
+SDL_DYLIB = $(SDL_PREFIX)/lib/libSDL3.0.dylib
+
+app: pacman macos/Info.plist macos/Pacman.icns
+	rm -rf $(APP)
+	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources $(APP)/Contents/Frameworks
+	cp macos/Info.plist $(APP)/Contents/
+	cp macos/Pacman.icns $(APP)/Contents/Resources/
+	cp -R images init sounds $(APP)/Contents/Resources/
+	cp pacman $(APP)/Contents/MacOS/Pacman
+	cp $(SDL_DYLIB) $(APP)/Contents/Frameworks/
+	chmod u+w $(APP)/Contents/Frameworks/libSDL3.0.dylib
+	install_name_tool -id @rpath/libSDL3.0.dylib $(APP)/Contents/Frameworks/libSDL3.0.dylib
+	install_name_tool -change $(SDL_DYLIB) @rpath/libSDL3.0.dylib \
+		-delete_rpath $(SDL_PREFIX)/lib -add_rpath @executable_path/../Frameworks \
+		$(APP)/Contents/MacOS/Pacman
+	codesign --force --sign - $(APP)/Contents/Frameworks/libSDL3.0.dylib
+	codesign --force --sign - $(APP)
+
 # Game-logic tests (no window or sound needed).
 TEST_OBJS = $(OBJDIR)/game.o $(OBJDIR)/level.o $(OBJDIR)/net.o $(OBJDIR)/input.o \
             $(OBJDIR)/allegro_compat.o $(OBJDIR)/logic_test.o
@@ -43,6 +64,6 @@ test: logic_test
 	./logic_test
 
 clean:
-	rm -rf $(OBJDIR) pacman logic_test
+	rm -rf $(OBJDIR) pacman logic_test $(APP)
 
-.PHONY: run test clean
+.PHONY: run test app clean
