@@ -34,7 +34,9 @@
   <p class="help">
     <kbd>1</kbd>–<kbd>3</kbd> or arrows + <kbd>Enter</kbd> in menus ·
     arrows to move · <kbd>P</kbd> pause · <kbd>Esc</kbd> back to the menu<br>
-    Single player. For LAN games with friends, get the Mac app from
+    Play alone, or host an online game and share its 4-digit room code with up to three friends.
+    In multiplayer: <kbd>H</kbd>/<kbd>G</kbd> send/get a ghost, <kbd>D</kbd>/<kbd>F</kbd> a dot,
+    <kbd>C</kbd>/<kbd>V</kbd> a power dot. The Mac app is on
     <a href="https://github.com/gkollias/pacman/releases" style="color: var(--maze)">the releases page</a>.
   </p>
 </main>
@@ -59,6 +61,12 @@
   canvas.addEventListener('blur', function () {
     if (ready) { statusEl.textContent = 'Click to keep playing'; hintEl.textContent = 'The game needs keyboard focus'; overlay.hidden = false; }
   });
+
+  /* The relay server for online games (relay/server.js). Override with
+     ?relay=wss://host for testing; on localhost it's the local relay. */
+  var PRODUCTION_RELAY = '';
+  window.PACMAN_RELAY = new URLSearchParams(location.search).get('relay') ||
+    (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? 'ws://localhost:8787' : PRODUCTION_RELAY);
 
   /* Each build loads its own files: browsers can't mix a new page with
      a cached old game. (make web fills in the build id.) */

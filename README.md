@@ -33,14 +33,25 @@ cd Pacman2 && make app
 
 Hosting a LAN game makes macOS ask once whether Pacman may accept incoming connections.
 
-**Play in the browser (single player): https://gkollias.github.io/pacman/** — built to
-WebAssembly with Emscripten and published by `.github/workflows/pages.yml` on every push to `main`.
-To build it locally:
+**Play in the browser: https://gkollias.github.io/pacman/** — built to WebAssembly with
+Emscripten and published by `.github/workflows/pages.yml` on every push to `main`.
+
+Online games in the browser go through a small relay server (`relay/`, Node + `ws`): the host gets a
+4-digit room code and up to three friends join with it. Browsers can't listen for connections, so the
+relay passes the game's messages around the way the Mac host does on a LAN; the host's game still runs
+the game. The relay is deployed on Render from `render.yaml`; the page's `PRODUCTION_RELAY`
+(`Pacman2/web_shell.html`) points at it, and `?relay=wss://...` overrides it.
+
+To run it all locally:
 
 ```bash
 brew install emscripten
-cd Pacman2 && make serve   # then open http://localhost:8080
+cd relay && npm install && npm start      # relay on ws://localhost:8787
+cd Pacman2 && make serve                  # then open http://localhost:8080 in two windows
 ```
+
+`cd relay && npm test` runs the relay's tests. The Mac app still plays LAN games over TCP; Mac and
+browser players can't be in the same game.
 
 - Menus: single player / host (server) / join (client), then difficulty and speed.
 - Up to 4 players on a LAN (TCP port 10000). The maze is split into territories; your dots are

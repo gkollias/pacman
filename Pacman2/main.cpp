@@ -9,6 +9,14 @@
 #include "common.h"
 #include "game.h"
 #include "net.h"
+#if WEB_BUILD
+#include <emscripten.h>
+/* The relay's address comes from the web page (window.PACMAN_RELAY). */
+EM_JS(char*, RelayUrlFromPage, (), {
+	var url = (typeof window !== "undefined" && window.PACMAN_RELAY) || "";
+	return stringToNewUTF8(url);
+});
+#endif
 
 static volatile int ticks = 0;
 static void Tick(void) { ticks++; }
@@ -58,14 +66,14 @@ static int Menu(const char* title, const char* const* options, int count, int se
 }
 
 /* Toggles for the optional features. Returns -1 on Escape. */
-static int OptionsMenu(int options)
+static int OptionsMenu(int options, bool multiplayer)
 {
 	static const char* const NAMES[] = {
 		"Moving obstacles", "Dots run away from Pac-Man",
-		"Tunnel leads to the next player's maze (LAN)", "Cornered: send a ghost away (LAN)",
+		"Tunnel leads to the next player's maze (multiplayer)", "Cornered: send a ghost away (multiplayer)",
 	};
 	static const int FLAGS[] = { OPT_MOVING_WALLS, OPT_MOVING_DOTS, OPT_TERRAINS, OPT_AUTO_SEND };
-	const int count = WEB_BUILD ? 2 : 4;  /* the LAN options don't apply on the web */
+	const int count = multiplayer || !WEB_BUILD ? 4 : 2;  /* no point showing multiplayer options to a lone web player */
 	int selected = 0;
 	for (;;) {
 		NextFrame();
@@ -78,8 +86,8 @@ static int OptionsMenu(int options)
 		if (input.Pressed(KEY_ENTER) || input.Pressed(KEY_ENTER_PAD)) return options;
 
 		clear_to_color(buffer, makecol(0, 0, 0));
-		Text(220, 183, WEB_BUILD ? "Options (1-2 or Space to toggle, Enter to play):"
-		                         : "Options (1-4 or Space to toggle, Enter to play):");
+		Text(220, 183, count == 2 ? "Options (1-2 or Space to toggle, Enter to play):"
+		                          : "Options (1-4 or Space to toggle, Enter to play):");
 		for (int i = 0; i < count; i++) {
 			char line[96];
 			snprintf(line, sizeof(line), "%s%d.[%s] %s", i == selected ? "> " : "  ", i + 1,
@@ -105,24 +113,24 @@ static void Notice(const char* line1, const char* line2)
 	}
 }
 
-/* Edits a server address. Returns false on Escape. */
-static bool AskAddress(std::string& addr)
+/* Edits a line of digits (and dots, if allowed). Returns false on Escape. */
+static bool AskText(const char* prompt, const char* help, std::string& value, bool dots, size_t max_len)
 {
 	for (;;) {
 		NextFrame();
 		if (input.Pressed(KEY_ESC)) return false;
-		if (input.Pressed(KEY_ENTER) || input.Pressed(KEY_ENTER_PAD)) return !addr.empty();
-		if (input.Pressed(KEY_BACKSPACE) && !addr.empty()) addr.erase(addr.size() - 1);
-		if (input.Pressed(KEY_STOP) && addr.size() < 40) addr += '.';
+		if (input.Pressed(KEY_ENTER) || input.Pressed(KEY_ENTER_PAD)) return !value.empty();
+		if (input.Pressed(KEY_BACKSPACE) && !value.empty()) value.erase(value.size() - 1);
+		if (dots && input.Pressed(KEY_STOP) && value.size() < max_len) value += '.';
 		for (int d = 0; d <= 9; d++) {
 			int k = d == 0 ? KEY_0 : KEY_1 + d - 1;
-			if (input.Pressed(k) && addr.size() < 40) addr += (char)('0' + d);
+			if (input.Pressed(k) && value.size() < max_len) value += (char)('0' + d);
 		}
 		clear_to_color(buffer, makecol(0, 0, 0));
-		Text(220, 183, "Enter the server's IP address and press enter:");
-		std::string shown = addr + ((ticks / 30) % 2 ? " " : "_");
+		Text(220, 183, prompt);
+		std::string shown = value + ((ticks / 30) % 2 ? " " : "_");
 		Text(220, 203, shown.c_str());
-		Text(220, 223, "(digits, '.', Backspace)");
+		Text(220, 223, help);
 		Show();
 	}
 }
@@ -137,7 +145,13 @@ static int Lobby(Net& net)
 		if (input.Pressed(KEY_ENTER) || input.Pressed(KEY_ENTER_PAD)) return net.PlayerCount();
 		clear_to_color(buffer, makecol(0, 0, 0));
 		char line[80];
+#if WEB_BUILD
+		snprintf(line, sizeof(line), "Room code: %s", net.RoomCode().c_str());
+		Text(220, 173, line);
+		Text(220, 183, "Share this code with your friends; they join from this page.");
+#else
 		Text(220, 183, "Hosting a game on port 10000.");
+#endif
 		snprintf(line, sizeof(line), "Players connected: %d (max 4)", net.PlayerCount());
 		Text(220, 203, line);
 		Text(220, 223, "Press Enter to start.");
@@ -176,7 +190,7 @@ static bool WaitForStart(Net& net, int& my_id, int& players, int& difficulty, in
 		Text(220, 183, line);
 		snprintf(line, sizeof(line), "Players in lobby: %d", lobby);
 		Text(220, 193, line);
-		Text(220, 213, "Waiting for the server to start the game...");
+		Text(220, 213, "Waiting for the host to start the game...");
 		Show();
 	}
 }
@@ -227,17 +241,28 @@ int main()
 		fprintf(stderr, "No sound device; continuing without sound.\n");
 	buffer = create_bitmap(GAME_W, GAME_H);
 
+#if WEB_BUILD
+	static const char* const MODES[] = { "Single player", "Host an online game", "Join an online game" };
+	char* relay_c = RelayUrlFromPage();
+	std::string relay = relay_c ? relay_c : "";
+	free(relay_c);
+	std::string room_code;
+#else
 	static const char* const MODES[] = { "Single player", "Server (host a LAN game)", "Client (join a LAN game)" };
+#endif
 	static const char* const DIFFICULTIES[] = { "Easy", "Normal", "Hard" };
 	static const char* const SPEEDS[] = { "Slow", "Normal", "Fast" };
 	std::string address = "127.0.0.1";
 
 	for (;;) {
-#if WEB_BUILD
-		int mode = 0;  /* single player: browsers can't host or join LAN games */
-		(void)MODES;
-#else
 		int mode = Menu("Enter your choice:", MODES, 3, 0);
+#if WEB_BUILD
+		if (mode < 0) continue;  /* a web page has nothing to quit to */
+		if (mode > 0 && relay.empty()) {
+			Notice("Online play isn't set up on this page.", "(No game server address.)");
+			continue;
+		}
+#else
 		if (mode < 0) break;
 #endif
 
@@ -246,12 +271,21 @@ int main()
 		std::vector<std::string> after_start;
 
 		if (mode == 2) {
-			if (!AskAddress(address)) continue;
+#if WEB_BUILD
+			if (!AskText("Enter the 4-digit room code and press enter:", "(digits, Backspace)", room_code, false, 4)) continue;
+			net = new Net();
+			clear_to_color(buffer, makecol(0, 0, 0));
+			Text(220, 183, ("Joining game " + room_code + "...").c_str());
+			Show();
+			if (!net->JoinRelay(relay, room_code)) {
+#else
+			if (!AskText("Enter the server's IP address and press enter:", "(digits, '.', Backspace)", address, true, 40)) continue;
 			net = new Net();
 			clear_to_color(buffer, makecol(0, 0, 0));
 			Text(220, 183, ("Connecting to " + address + "...").c_str());
 			Show();
 			if (!net->Connect(address.c_str(), PACMAN_PORT)) {
+#endif
 				Notice("Could not join the game.", net->Error().c_str());
 				delete net;
 				continue;
@@ -262,11 +296,18 @@ int main()
 			if (difficulty < 0) continue;
 			speed = Menu("Select the speed of the Game and press enter:", SPEEDS, 3, MEDIUM);
 			if (speed < 0) continue;
-			options = OptionsMenu(options);
+			options = OptionsMenu(options, mode == 1);
 			if (options < 0) continue;
 			if (mode == 1) {
 				net = new Net();
+				clear_to_color(buffer, makecol(0, 0, 0));
+				Text(220, 183, "Setting up the game...");
+				Show();
+#if WEB_BUILD
+				if (!net->HostRelay(relay)) {
+#else
 				if (!net->Host(PACMAN_PORT)) {
+#endif
 					Notice("Could not host the game.", net->Error().c_str());
 					delete net;
 					continue;

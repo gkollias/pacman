@@ -34,9 +34,18 @@ public:
 	Net();
 	virtual ~Net();
 
+#ifdef __EMSCRIPTEN__
+	/* Browser build: online games through the relay (relay/server.js)
+	   over a WebSocket, since a web page can't listen for connections. */
+	bool HostRelay(const std::string& url);                         /* get a room code */
+	bool JoinRelay(const std::string& url, const std::string& code);
+	const std::string& RoomCode() const { return room; }
+	virtual bool IsServer() const { return is_host; }
+#else
 	bool Host(int port);
 	bool Connect(const char* host, int port);
 	virtual bool IsServer() const { return listen_fd >= 0; }
+#endif
 	const std::string& Error() const { return error; }
 
 	/* Client: to the server. Server: to every client. */
@@ -52,17 +61,29 @@ public:
 	void CloseLobby() { lobby_open = false; }
 
 private:
-	struct Conn { int fd; int id; std::string in, out; };
-	int listen_fd;
-	std::vector<Conn> conns;  /* server: clients; client: the server */
 	std::vector<int> disconnected;
 	bool lobby_open, server_lost;
 	std::string error;
+#ifdef __EMSCRIPTEN__
+	int socket;                      /* EMSCRIPTEN_WEBSOCKET_T */
+	bool is_host, opened, closed;
+	std::string room;
+	int lobby_players;
+	std::vector<int> joined;         /* host: players in the room */
+	std::vector<std::string> inbox;  /* filled by the WebSocket callbacks */
+	friend struct NetWebCallbacks;   /* net_web.cpp */
+	bool Open(const std::string& url);
+	bool WaitFor(const char* prefix, int ms);
+#else
+	struct Conn { int fd; int id; std::string in, out; };
+	int listen_fd;
+	std::vector<Conn> conns;  /* server: clients; client: the server */
 
 	void Accept();
 	void Queue(Conn& c, const std::string& line);
 	bool Flush(Conn& c);
 	void Drop(size_t i);
+#endif
 };
 
 #endif

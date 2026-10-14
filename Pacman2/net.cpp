@@ -23,7 +23,7 @@ static void Configure(int fd)
 #endif
 }
 
-Net::Net() : listen_fd(-1), lobby_open(true), server_lost(false) {}
+Net::Net() : lobby_open(true), server_lost(false), listen_fd(-1) {}
 
 Net::~Net()
 {

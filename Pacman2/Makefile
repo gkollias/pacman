@@ -54,13 +54,14 @@ app: pacman macos/Info.plist macos/Pacman.icns
 # -sASYNCIFY lets the game's waits (rest) yield to the browser.
 EMXX     ?= em++
 WEB_OUT   = web
-WEB_FLAGS = -std=c++11 -O2 -I$(COMPAT) --use-port=sdl3 -sASYNCIFY -sALLOW_MEMORY_GROWTH \
+WEB_SRCS  = $(filter-out net.cpp,$(SRCS)) net_web.cpp   # WebSocket to the relay instead of TCP
+WEB_FLAGS = -std=c++11 -O2 -I$(COMPAT) --use-port=sdl3 -sASYNCIFY -sALLOW_MEMORY_GROWTH -lwebsocket.js \
             --preload-file images@/images --preload-file init@/init --preload-file sounds@/sounds \
             --shell-file web_shell.html
 
-web: $(SRCS) $(COMPAT)/allegro_compat.cpp $(wildcard *.h) $(COMPAT)/allegro.h web_shell.html
+web: $(WEB_SRCS) $(COMPAT)/allegro_compat.cpp $(wildcard *.h) $(COMPAT)/allegro.h web_shell.html
 	@mkdir -p $(WEB_OUT)
-	$(EMXX) $(WEB_FLAGS) $(SRCS) $(COMPAT)/allegro_compat.cpp -o $(WEB_OUT)/index.html
+	$(EMXX) $(WEB_FLAGS) $(WEB_SRCS) $(COMPAT)/allegro_compat.cpp -o $(WEB_OUT)/index.html
 	@# Version the game files so a new deploy never mixes with cached old ones.
 	@id=$$(git rev-parse --short HEAD 2>/dev/null || echo dev)-$$(date +%s); \
 	sed -i.bak -E -e "s/__BUILD_ID__/$$id/" -e "s#src=\"?index\.js\"?#src=\"index.js?v=$$id\"#" $(WEB_OUT)/index.html && \

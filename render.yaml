@@ -1,0 +1,15 @@
+# Render blueprint for the Pacman relay (online games for the web version).
+# In the Render dashboard: New > Blueprint > this repository > Apply.
+services:
+  - type: web
+    name: pacman-relay
+    runtime: node
+    rootDir: relay
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
