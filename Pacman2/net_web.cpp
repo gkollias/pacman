@@ -63,8 +63,9 @@ bool Net::Open(const std::string& url)
 	emscripten_websocket_set_onmessage_callback(socket, this, NetWebCallbacks::OnMessage);
 	emscripten_websocket_set_onclose_callback(socket, this, NetWebCallbacks::OnClose);
 	emscripten_websocket_set_onerror_callback(socket, this, NetWebCallbacks::OnError);
-	/* Callbacks run while we yield to the browser. */
-	for (int waited = 0; !opened && !closed && waited < 5000; waited += 10) emscripten_sleep(10);
+	/* Callbacks run while we yield to the browser. A relay on a free host
+	   may be asleep and take most of a minute to wake up. */
+	for (int waited = 0; !opened && !closed && waited < 75000; waited += 10) emscripten_sleep(10);
 	if (!opened) {
 		if (error.empty()) error = "Cannot reach the game server";
 		return false;
@@ -93,7 +94,7 @@ bool Net::HostRelay(const std::string& url)
 {
 	if (!Open(url)) return false;
 	emscripten_websocket_send_utf8_text(socket, "HOST");
-	if (!WaitFor("[ROOM ", 5000)) return false;
+	if (!WaitFor("[ROOM ", 15000)) return false;
 	room = inbox.front().substr(6, 4);
 	inbox.erase(inbox.begin());
 	is_host = true;
@@ -105,7 +106,7 @@ bool Net::JoinRelay(const std::string& url, const std::string& code)
 	if (!Open(url)) return false;
 	std::string join = "JOIN " + code;
 	emscripten_websocket_send_utf8_text(socket, join.c_str());
-	return WaitFor("[WELCOME ", 5000);  /* [WELCOME id] is left for the lobby screen */
+	return WaitFor("[WELCOME ", 15000);  /* [WELCOME id] is left for the lobby screen */
 }
 
 void Net::Send(const std::string& line)

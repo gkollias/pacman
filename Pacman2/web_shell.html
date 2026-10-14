@@ -64,7 +64,7 @@
 
   /* The relay server for online games (relay/server.js). Override with
      ?relay=wss://host for testing; on localhost it's the local relay. */
-  var PRODUCTION_RELAY = '';
+  var PRODUCTION_RELAY = 'wss://pacman-relay.onrender.com';
   window.PACMAN_RELAY = new URLSearchParams(location.search).get('relay') ||
     (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? 'ws://localhost:8787' : PRODUCTION_RELAY);
 

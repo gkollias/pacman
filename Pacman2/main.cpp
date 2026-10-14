@@ -276,6 +276,8 @@ int main()
 			net = new Net();
 			clear_to_color(buffer, makecol(0, 0, 0));
 			Text(220, 183, ("Joining game " + room_code + "...").c_str());
+			Text(220, 203, "If nobody has played for a while, the game server");
+			Text(220, 213, "can take up to a minute to wake up.");
 			Show();
 			if (!net->JoinRelay(relay, room_code)) {
 #else
@@ -302,6 +304,10 @@ int main()
 				net = new Net();
 				clear_to_color(buffer, makecol(0, 0, 0));
 				Text(220, 183, "Setting up the game...");
+#if WEB_BUILD
+				Text(220, 203, "If nobody has played for a while, the game server");
+				Text(220, 213, "can take up to a minute to wake up.");
+#endif
 				Show();
 #if WEB_BUILD
 				if (!net->HostRelay(relay)) {
