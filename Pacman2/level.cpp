@@ -17,6 +17,8 @@ bool Level::Load(const std::string& path)
 		return false;
 	}
 	cells.assign(width * height, Cell());
+	marks.clear();
+	track.assign(width * height, false);
 	for (int i = 0; i < width * height; i++) {
 		char type[8];
 		int value = 0;
@@ -28,11 +30,19 @@ bool Level::Load(const std::string& path)
 		Cell& c = cells[i];
 		c.type = CELL_EMPTY;
 		c.wall_tile = 0;
-		c.owner = 0;
-		c.eaten = false;
-		if (!strcmp(type, "OB")) { c.type = CELL_WALL; c.wall_tile = value; }
-		else if (!strcmp(type, "SM")) { c.type = CELL_SIMPLE_MARK; c.owner = value; }
-		else if (!strcmp(type, "PM")) { c.type = CELL_POWER_MARK; c.owner = value; }
+		if (!strcmp(type, "OB")) {
+			c.type = CELL_WALL;
+			c.wall_tile = value;
+		} else if (!strcmp(type, "SM") || !strcmp(type, "PM")) {
+			Mark m;
+			m.col = i % width;
+			m.row = i / width;
+			m.type = !strcmp(type, "SM") ? CELL_SIMPLE_MARK : CELL_POWER_MARK;
+			m.owner = value;
+			m.eaten = false;
+			marks.push_back(m);
+			track[i] = true;
+		}
 	}
 	fclose(fp);
 	return true;
@@ -44,20 +54,24 @@ int Level::WrapCol(int col) const
 	return col < 0 ? col + width : col;
 }
 
-Cell& Level::At(int col, int row) { return cells[Index(col, row)]; }
-const Cell& Level::At(int col, int row) const { return cells[Index(col, row)]; }
-
 bool Level::IsWall(int col, int row) const
 {
 	if (row < 0 || row >= height) return true;
 	return At(col, row).type == CELL_WALL;
 }
 
+int Level::MarkAt(int col, int row) const
+{
+	col = WrapCol(col);
+	for (size_t i = 0; i < marks.size(); i++)
+		if (!marks[i].eaten && marks[i].col == col && marks[i].row == row) return (int)i;
+	return -1;
+}
+
 int Level::RemainingMarks(int owner) const
 {
 	int n = 0;
-	for (size_t i = 0; i < cells.size(); i++)
-		if (IsMark(cells[i]) && !cells[i].eaten && (owner == 0 || cells[i].owner == owner))
-			n++;
+	for (size_t i = 0; i < marks.size(); i++)
+		if (!marks[i].eaten && (owner == 0 || marks[i].owner == owner)) n++;
 	return n;
 }

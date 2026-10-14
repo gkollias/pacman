@@ -1,0 +1,5 @@
+# Moving wall blocks (Pacman2): each patrols a straight run of empty cells.
+# start_col start_row axis(H|V) cells ms_per_cell
+6 11 H 7 600
+0 9 H 4 900
+15 9 H 4 900

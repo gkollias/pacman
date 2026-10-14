@@ -12,12 +12,17 @@
  * server, which handles it and relays it to every other client. Server
  * messages go to all clients.
  *
- * Lobby:   [WELCOME id]  [LOBBY players]  [START players difficulty speed]
- * Game:    [EAT_SM idx id] [EAT_PM idx id] [SCORE id n] [LIVES id n]
+ * Lobby:   [WELCOME id]  [LOBBY players]  [START players difficulty speed options]
+ * Game:    [EAT_SM mark id] [EAT_PM mark id terrain] [SCORE id n] [LIVES id n]
  *          [STATE id state] [PAUSE id] [UNPAUSE id] [LEFT id]
  *          [SEND_SM from to] [GET_SM from to] [SEND_PM from to] [GET_PM from to]
- *          [MOVE_MARK idx owner]   (server's answer to the four above)
- *          [GHOST to color label] [GET_GHOST from to]
+ *          [MOVE_MARK mark owner]   (server's answer to the four above)
+ *          [MOVE_DOT mark col row]  (server: a power dot wandered)
+ *          [GHOST to color label col row dir] [GET_GHOST from to]
+ * Terrains (the side tunnel leads into the next player's maze):
+ *          [PAC_TERRAIN id terrain] [PAC_POS id terrain x y dir anim]
+ *          [SNAP terrain fright walls... ghosts...]  (host -> visitors)
+ *          [PAC_HIT id] [GHOST_EATEN id points]      (host decides collisions)
  */
 
 #define PACMAN_PORT 10000

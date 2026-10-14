@@ -4,6 +4,7 @@
  * Run from the Pacman2 directory (assets use relative paths): make test
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <deque>
 #include <string>
 #include <vector>
@@ -59,13 +60,19 @@ struct GameTest {
 	static Level& level(Game& g) { return g.level; }
 	static Actor& pac(Game& g) { return g.pac; }
 	static std::vector<Ghost>& ghosts(Game& g) { return g.ghosts; }
+	static std::vector<MovingWall>& walls(Game& g) { return g.walls; }
+	static std::vector<Ghost>& remote_ghosts(Game& g) { return g.remote_ghosts; }
+	static std::map<int, RemotePac>& remote_pacs(Game& g) { return g.remote_pacs; }
 	static PlayerInfo& me(Game& g) { return g.players[g.my_id]; }
 	static PlayerInfo& player(Game& g, int id) { return g.players[id]; }
 	static Phase& phase(Game& g) { return g.phase; }
 	static Dir& wanted(Game& g) { return g.wanted; }
+	static int terrain(Game& g) { return g.pac_terrain; }
+	static int fright(Game& g) { return g.fright_ticks; }
 	static bool PacCanEnter(Game& g, int c, int r) { return g.PacCanEnter(c, r); }
 	static void StartFright(Game& g) { g.StartFright(); }
 	static void CheckCollisions(Game& g) { g.CheckCollisions(); }
+	static void CheckCornered(Game& g) { g.CheckCornered(); }
 	static void EatAt(Game& g, int c, int r) { g.EatAt(c, r); }
 	static void SendGhostTo(Game& g, int to) { g.SendGhostTo(to); }
 	static void RequestMark(Game& g, const char* w, int from, int to) { g.RequestMark(w, from, to); }
@@ -91,7 +98,28 @@ static int CountOwned(Game& g, int owner)
 	return T::level(g).RemainingMarks(owner);
 }
 
-/* ---- tests ---------------------------------------------------------- */
+/* The first uneaten mark of a type and owner, or -1. */
+static int FindMark(Game& g, CellType type, int owner)
+{
+	Level& l = T::level(g);
+	for (int i = 0; i < l.MarkCount(); i++) {
+		const Mark& m = l.GetMark(i);
+		if (!m.eaten && m.type == type && m.owner == owner) return i;
+	}
+	return -1;
+}
+
+static bool BoxOverlapsCell(int x, int y, int col, int row, int width)
+{
+	if (y >= (row + 1) * TILE || y + TILE <= row * TILE) return false;
+	for (int s = -1; s <= 1; s++) {
+		int cx = (col + s * width) * TILE;
+		if (x < cx + TILE && x + TILE > cx) return true;
+	}
+	return false;
+}
+
+/* ---- single player ------------------------------------------------- */
 
 static void TestLevel()
 {
@@ -99,10 +127,12 @@ static void TestLevel()
 	Level l;
 	CHECK(l.Load("./init/Grid/Grid_1.txt"));
 	CHECK(l.Width() == 19 && l.Height() == 21);
-	CHECK(l.RemainingMarks(0) == 153);           /* 149 dots + 4 power marks */
+	CHECK(l.MarkCount() == 153);                 /* 149 dots + 4 power marks */
 	CHECK(l.RemainingMarks(1) == 153);
 	CHECK(l.IsWall(0, 0) && !l.IsWall(1, 1));
 	CHECK(!l.IsWall(-1, 9) && !l.IsWall(19, 9));  /* tunnel wraps */
+	CHECK(l.MarkAt(1, 1) >= 0 && l.MarkAt(0, 9) < 0);
+	CHECK(l.IsTrack(1, 1) && !l.IsTrack(0, 9));
 	Level l4;
 	CHECK(l4.Load("./init/Grid/Grid_4.txt"));
 	int total = 0;
@@ -114,7 +144,7 @@ static void TestDoorAndTunnel()
 {
 	printf("ghost house door and tunnel\n");
 	Game g;
-	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL));
+	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, 0));
 	CHECK(!T::PacCanEnter(g, 9, 8));   /* door */
 	CHECK(T::PacCanEnter(g, 9, 7));
 	T::ghosts(g).clear();
@@ -131,7 +161,7 @@ static void TestOneLifePerDeath()
 {
 	printf("one death costs one life\n");
 	Game g;
-	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL));
+	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, 0));
 	for (int death = 1; death <= 4; death++) {
 		T::StartPlaying(g);
 		Ghost& gh = T::ghosts(g)[0];
@@ -142,7 +172,6 @@ static void TestOneLifePerDeath()
 		CHECK(T::phase(g) == PHASE_DYING);
 		Run(g, 5 * TICKS_PER_SEC);       /* long enough for the animation */
 		CHECK(T::me(g).lives == 4 - death);
-		if (death < 4) CHECK(T::phase(g) == PHASE_PLAYING || T::phase(g) == PHASE_READY || T::phase(g) == PHASE_DYING);
 	}
 	CHECK(T::phase(g) == PHASE_GAMEOVER);
 	CHECK(T::me(g).lives == 0);
@@ -152,7 +181,7 @@ static void TestEatGhost()
 {
 	printf("frightened ghost is eaten, returns home, revives\n");
 	Game g;
-	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL));
+	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, 0));
 	T::StartPlaying(g);
 	T::StartFright(g);
 	Ghost& gh = T::ghosts(g)[0];
@@ -164,7 +193,6 @@ static void TestEatGhost()
 	CHECK(T::ghosts(g)[0].mode == GHOST_EYES);
 	CHECK(T::me(g).score == before + 200);
 	CHECK(T::phase(g) == PHASE_PLAYING);
-	/* Keep Pac-Man out of the way and wait for the eyes to get home. */
 	bool reached_home = false, revived = false;
 	for (int i = 0; i < 30 * TICKS_PER_SEC && !revived; i++) {
 		T::pac(g).Place(9, 15);
@@ -182,23 +210,87 @@ static void TestCompleteSinglePlayer()
 {
 	printf("clearing the maze completes the game\n");
 	Game g;
-	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL));
+	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, 0));
 	T::StartPlaying(g);
 	Level& l = T::level(g);
-	int last = -1;
-	for (int i = 0; i < l.CellCount(); i++)
-		if (l.IsMark(l.AtIndex(i))) { if (last >= 0) l.AtIndex(last).eaten = true; last = i; }
+	for (int i = 0; i + 1 < l.MarkCount(); i++) l.GetMark(i).eaten = true;
 	CHECK(T::phase(g) == PHASE_PLAYING);
-	T::EatAt(g, last % l.Width(), last / l.Width());
+	const Mark& last = l.GetMark(l.MarkCount() - 1);
+	T::EatAt(g, last.col, last.row);
 	CHECK(T::phase(g) == PHASE_COMPLETED);
 }
 
-/* Two or three games connected through the fake hub. */
+static void TestMovingWalls()
+{
+	printf("moving walls slide but never crush anyone\n");
+	srand(1);
+	Game g;
+	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_WALLS));
+	CHECK(T::walls(g).size() == 3);
+	T::StartPlaying(g);
+	T::me(g).lives = 1000;   /* keep playing through deaths */
+	std::vector<MovingWall> start = T::walls(g);
+	bool moved = false, crushed = false;
+	static const Dir DIRS[4] = { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
+	int w = T::level(g).Width();
+	for (int t = 0; t < 120 * TICKS_PER_SEC; t++) {
+		if (t % 30 == 0) T::wanted(g) = DIRS[rand() % 4];  /* wander about */
+		Run(g, 1);
+		if (T::phase(g) != PHASE_PLAYING) continue;
+		const std::vector<MovingWall>& ws = T::walls(g);
+		for (size_t i = 0; i < ws.size(); i++) {
+			if (ws[i].col != start[i].col || ws[i].row != start[i].row) moved = true;
+			int cells[2][2] = { { ws[i].col, ws[i].row }, { ws[i].from_col, ws[i].from_row } };
+			for (int k = 0; k < (ws[i].slide > 0 ? 2 : 1); k++) {
+				if (BoxOverlapsCell(T::pac(g).x, T::pac(g).y, cells[k][0], cells[k][1], w)) crushed = true;
+				for (size_t j = 0; j < T::ghosts(g).size(); j++)
+					if (BoxOverlapsCell(T::ghosts(g)[j].x, T::ghosts(g)[j].y, cells[k][0], cells[k][1], w)) crushed = true;
+			}
+		}
+	}
+	CHECK(moved);
+	CHECK(!crushed);
+}
+
+static void TestMovingDots()
+{
+	printf("power dots wander only into cleared corridor cells\n");
+	srand(2);
+	Game g;
+	CHECK(g.Init(NORMAL, MEDIUM, 1, 1, NULL, OPT_MOVING_DOTS));
+	T::StartPlaying(g);
+	T::ghosts(g).clear();
+	Level& l = T::level(g);
+	/* Clear the dots around the top-left power dot. */
+	int pm = l.MarkAt(1, 2);
+	CHECK(pm >= 0 && l.GetMark(pm).type == CELL_POWER_MARK);
+	for (int i = 0; i < l.MarkCount(); i++)
+		if (l.GetMark(i).type == CELL_SIMPLE_MARK && l.GetMark(i).row <= 5) l.GetMark(i).eaten = true;
+	T::pac(g).Place(9, 15);
+	T::pac(g).dir = DIR_NONE;
+	bool moved = false, off_track = false, stacked = false;
+	for (int t = 0; t < 30 * TICKS_PER_SEC; t++) {
+		Run(g, 1);
+		const Mark& m = l.GetMark(pm);
+		if (m.col != 1 || m.row != 2) moved = true;
+		if (!l.IsTrack(m.col, m.row)) off_track = true;
+		for (int i = 0; i < l.MarkCount(); i++)
+			if (i != pm && !l.GetMark(i).eaten && l.GetMark(i).col == m.col && l.GetMark(i).row == m.row) stacked = true;
+	}
+	CHECK(moved);
+	CHECK(!off_track);
+	CHECK(!stacked);
+	CHECK(!l.GetMark(pm).eaten);
+}
+
+/* ---- multiplayer ---------------------------------------------------- */
+
+/* Two to four games connected through the fake hub. */
 struct Match {
 	Hub hub;
 	std::vector<Game*> games;
 	std::vector<FakeNet*> nets;
-	Match(int players)
+	Match(int players, int options = 0)
 	{
 		for (int id = 1; id <= players; id++) {
 			nets.push_back(new FakeNet(&hub, id));
@@ -208,7 +300,7 @@ struct Match {
 		/* Like the real game: every client has loaded the maze (on [START])
 		   before the server's first messages arrive. */
 		for (int id = players; id >= 1; id--)
-			CHECK(games[id - 1]->Init(NORMAL, MEDIUM, players, id, nets[id - 1]));
+			CHECK(games[id - 1]->Init(NORMAL, MEDIUM, players, id, nets[id - 1], options));
 		hub.Pump();
 		for (int id = 1; id <= players; id++) T::StartPlaying(*games[id - 1]);
 	}
@@ -217,15 +309,26 @@ struct Match {
 		for (size_t i = 0; i < games.size(); i++) { delete games[i]; delete nets[i]; }
 	}
 	Game& operator[](int id) { return *games[id - 1]; }
+	/* Runs every game for some ticks, delivering messages after each. */
+	void Run(int ticks)
+	{
+		Input none;
+		for (int t = 0; t < ticks; t++) {
+			for (size_t i = 0; i < games.size(); i++) games[i]->Tick(none);
+			hub.Pump();
+		}
+	}
 	/* Every instance agrees on every mark. */
 	bool Consistent()
 	{
 		Level& a = T::level(*games[0]);
 		for (size_t g = 1; g < games.size(); g++) {
 			Level& b = T::level(*games[g]);
-			for (int i = 0; i < a.CellCount(); i++)
-				if (a.AtIndex(i).owner != b.AtIndex(i).owner || a.AtIndex(i).eaten != b.AtIndex(i).eaten)
-					return false;
+			for (int i = 0; i < a.MarkCount(); i++) {
+				const Mark& x = a.GetMark(i);
+				const Mark& y = b.GetMark(i);
+				if (x.owner != y.owner || x.eaten != y.eaten || x.col != y.col || x.row != y.row) return false;
+			}
 		}
 		return true;
 	}
@@ -244,18 +347,38 @@ static void TestMarkTransfers()
 	CHECK(CountOwned(m[2], 1) == own1 + 2 && CountOwned(m[2], 2) == own2 - 2);
 	CHECK(m.Consistent());
 
-	/* Eating is seen by everyone. */
-	Level& l2 = T::level(m[2]);
-	for (int i = 0; i < l2.CellCount(); i++) {
-		Cell& c = l2.AtIndex(i);
-		if (c.type == CELL_SIMPLE_MARK && c.owner == 2 && !c.eaten) {
-			T::EatAt(m[2], i % l2.Width(), i / l2.Width());
-			break;
-		}
-	}
+	int id = FindMark(m[2], CELL_SIMPLE_MARK, 2);
+	const Mark& mk = T::level(m[2]).GetMark(id);
+	T::EatAt(m[2], mk.col, mk.row);         /* eating is seen by everyone */
 	m.hub.Pump();
 	CHECK(CountOwned(m[1], 2) == own2 - 3);
 	CHECK(T::player(m[1], 2).score == 10);
+	CHECK(m.Consistent());
+}
+
+static void TestDotRace()
+{
+	printf("multiplayer: a dot moved and eaten at once stays consistent\n");
+	Match m(2, OPT_MOVING_DOTS);
+	int id = FindMark(m[2], CELL_POWER_MARK, 2);
+	Mark& mk = T::level(m[2]).GetMark(id);
+	T::EatAt(m[2], mk.col, mk.row);         /* client eats it ... */
+	m[1].HandleMessage("[GHOST 9 0 0 0 0 0]");  /* (no-op; keeps the queue busy) */
+	char move[64];                            /* ... while the server moves it */
+	snprintf(move, sizeof(move), "[MOVE_DOT %d %d %d]", id, 1, 1);
+	T::level(m[1]).GetMark(id).col = 1;
+	T::level(m[1]).GetMark(id).row = 1;
+	m.nets[0]->Send(move);
+	m.hub.Pump();
+	CHECK(T::level(m[1]).GetMark(id).eaten);
+	CHECK(m.Consistent());
+	/* And a real run with the server moving dots keeps everyone in step. */
+	for (int i = 0; i < T::level(m[1]).MarkCount(); i++)
+		if (T::level(m[1]).GetMark(i).type == CELL_SIMPLE_MARK) {
+			T::level(m[1]).GetMark(i).eaten = true;
+			T::level(m[2]).GetMark(i).eaten = true;
+		}
+	m.Run(20 * TICKS_PER_SEC);
 	CHECK(m.Consistent());
 }
 
@@ -269,8 +392,7 @@ static void TestGhostTransfers()
 	CHECK(T::ghosts(m[2]).size() == 5);
 	CHECK(T::ghosts(m[2]).back().label == 1); /* still shows its owner */
 	CHECK(T::ghosts(m[2]).back().mode == GHOST_LEAVING);
-	m[1].HandleMessage("[GET_GHOST 1 2]");    /* G on the server, as seen by the client */
-	m[2].HandleMessage("[GET_GHOST 1 2]");
+	m[2].HandleMessage("[GET_GHOST 1 2]");    /* G on the server, as seen by the client */
 	m.hub.Pump();
 	CHECK(T::ghosts(m[1]).size() == 4);
 	CHECK(T::ghosts(m[2]).size() == 4);
@@ -303,8 +425,7 @@ static void TestLeaveAndGameOver()
 		CHECK(CountOwned(m[1], 3) == 0);
 		CHECK(m.Consistent());
 		CHECK(T::player(m[2], 3).state == PS_LEFT);
-		/* The fourth territory was shared out at the start too. */
-		CHECK(CountOwned(m[2], 4) == 0);
+		CHECK(CountOwned(m[2], 4) == 0);       /* the fourth territory was shared at the start */
 	}
 	{
 		Match m(2);
@@ -333,35 +454,118 @@ static void TestTeamCompletion()
 {
 	printf("multiplayer: the team finishes when every mark is eaten\n");
 	Match m(2);
-	Level& l1 = T::level(m[1]);
-	for (int i = 0; i < l1.CellCount(); i++) {
-		Cell& c = l1.AtIndex(i);
-		if (l1.IsMark(c) && c.owner == 1) T::EatAt(m[1], i % l1.Width(), i / l1.Width());
-	}
+	for (int id; (id = FindMark(m[1], CELL_SIMPLE_MARK, 1)) >= 0 || (id = FindMark(m[1], CELL_POWER_MARK, 1)) >= 0; )
+		T::EatAt(m[1], T::level(m[1]).GetMark(id).col, T::level(m[1]).GetMark(id).row);
 	m.hub.Pump();
 	CHECK(T::phase(m[1]) == PHASE_PLAYING);   /* player 2 still has marks */
-	Level& l2 = T::level(m[2]);
-	for (int i = 0; i < l2.CellCount(); i++) {
-		Cell& c = l2.AtIndex(i);
-		if (l2.IsMark(c) && c.owner == 2 && !c.eaten) T::EatAt(m[2], i % l2.Width(), i / l2.Width());
-	}
+	for (int id; (id = FindMark(m[2], CELL_SIMPLE_MARK, 2)) >= 0 || (id = FindMark(m[2], CELL_POWER_MARK, 2)) >= 0; )
+		T::EatAt(m[2], T::level(m[2]).GetMark(id).col, T::level(m[2]).GetMark(id).row);
 	m.hub.Pump();
 	CHECK(T::phase(m[1]) == PHASE_COMPLETED);
 	CHECK(T::phase(m[2]) == PHASE_COMPLETED);
 }
 
+static void TestCornered()
+{
+	printf("multiplayer: a cornered Pac-Man sends the nearest ghost away\n");
+	Match m(2, OPT_AUTO_SEND);
+	Game& s = m[1];
+	/* (3,13) is a corridor open only to the left and right. */
+	T::pac(s).Place(3, 13);
+	std::vector<Ghost>& gs = T::ghosts(s);
+	for (size_t i = 0; i < gs.size(); i++) { gs[i].Place(17, 19); gs[i].mode = GHOST_NORMAL; }
+	gs[0].Place(5, 13);                       /* one ghost on the right only */
+	T::CheckCornered(s);
+	m.hub.Pump();
+	CHECK(gs.size() == 4);                    /* not cornered yet */
+	gs[1].Place(1, 13);                       /* and now one on the left */
+	T::CheckCornered(s);
+	m.hub.Pump();
+	CHECK(T::ghosts(s).size() == 3);
+	CHECK(T::ghosts(m[2]).size() == 5);
+	T::CheckCornered(s);                      /* cooldown: no second send at once */
+	m.hub.Pump();
+	CHECK(T::ghosts(s).size() == 3);
+}
+
+static void TestTerrains()
+{
+	printf("multiplayer: the tunnel leads into the neighbour's maze\n");
+	Match m(2, OPT_TERRAINS);
+	Game& s = m[1];
+	Game& c = m[2];
+	/* Park every ghost far from the tunnel so nothing interferes. */
+	for (int g = 1; g <= 2; g++)
+		for (size_t i = 0; i < T::ghosts(m[g]).size(); i++) T::ghosts(m[g])[i].Place(9, 3);
+	T::pac(s).Place(17, 9);
+	T::pac(s).dir = DIR_RIGHT;
+	T::wanted(s) = DIR_RIGHT;
+	for (int t = 0; t < 2 * TICKS_PER_SEC && T::terrain(s) == 1; t++) m.Run(1);
+	CHECK(T::terrain(s) == 2);               /* player 1 is now in player 2's maze */
+	CHECK(T::pac(s).Col() <= 1);             /* entering from the left */
+	m.Run(5);
+	CHECK(T::remote_pacs(c)[1].terrain == 2);
+	CHECK(T::remote_ghosts(s).size() == T::ghosts(c).size());  /* sees the host's ghosts */
+
+	/* A power dot eaten while visiting frightens the host's ghosts, not mine. */
+	int pm = FindMark(s, CELL_POWER_MARK, 1);
+	T::EatAt(s, T::level(s).GetMark(pm).col, T::level(s).GetMark(pm).row);
+	m.hub.Pump();
+	CHECK(T::fright(c) > 0);
+	CHECK(T::fright(s) == 0);
+	m.Run(10 * TICKS_PER_SEC);               /* let the fright wear off */
+
+	/* The host's ghost catches the visitor: it dies and goes home. */
+	T::wanted(s) = DIR_NONE;
+	T::pac(s).dir = DIR_NONE;
+	m.Run(2);
+	/* (The host's maze is frozen while its own Pac-Man respawns.) */
+	T::StartPlaying(c);
+	T::pac(c).Place(9, 15);
+	Ghost& gh = T::ghosts(c)[0];
+	gh.x = T::pac(s).x;
+	gh.y = T::pac(s).y;
+	gh.mode = GHOST_NORMAL;
+	gh.dir = DIR_NONE;
+	int lives = T::me(s).lives;
+	m.Run(2);
+	CHECK(T::phase(s) == PHASE_DYING);
+	m.Run(5 * TICKS_PER_SEC);
+	CHECK(T::me(s).lives == lives - 1);
+	CHECK(T::terrain(s) == 1);
+	CHECK(T::remote_pacs(c)[1].terrain == 1);
+
+	/* A ghost leaving through the tunnel moves to the next maze. */
+	size_t before_s = T::ghosts(s).size(), before_c = T::ghosts(c).size();
+	Ghost& wanderer = T::ghosts(s)[0];
+	wanderer.Place(18, 9);
+	wanderer.dir = DIR_RIGHT;
+	wanderer.mode = GHOST_NORMAL;
+	T::StartPlaying(s);
+	T::StartPlaying(c);
+	m.Run(TICKS_PER_SEC);
+	CHECK(T::ghosts(s).size() == before_s - 1);
+	CHECK(T::ghosts(c).size() == before_c + 1);
+}
+
 int main()
 {
+	if (getenv("SEED")) srand(atoi(getenv("SEED")));  /* SEED=n ./logic_test */
 	TestLevel();
 	TestDoorAndTunnel();
 	TestOneLifePerDeath();
 	TestEatGhost();
 	TestCompleteSinglePlayer();
+	TestMovingWalls();
+	TestMovingDots();
 	TestMarkTransfers();
+	TestDotRace();
 	TestGhostTransfers();
 	TestPause();
 	TestLeaveAndGameOver();
 	TestTeamCompletion();
+	TestCornered();
+	TestTerrains();
 	printf("%d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

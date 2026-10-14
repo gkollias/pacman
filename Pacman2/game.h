@@ -1,6 +1,7 @@
 #ifndef GAME_H_
 #define GAME_H_
 
+#include <map>
 #include <string>
 #include <vector>
 #include "common.h"
@@ -9,6 +10,15 @@
 class Net;
 
 #define MAX_PLAYERS 4
+
+/* Optional features (the original's Read me lists them; all on by default). */
+enum Option {
+	OPT_MOVING_WALLS = 1,  /* wall blocks slide along empty corridors */
+	OPT_MOVING_DOTS  = 2,  /* power dots wander into cleared corridors */
+	OPT_TERRAINS     = 4,  /* LAN: the side tunnel leads to a neighbour's maze */
+	OPT_AUTO_SEND    = 8,  /* LAN: a cornered Pac-Man sends a ghost away */
+	OPT_ALL          = 15
+};
 
 /* A 24x24 sprite moving on the grid. x/y are pixels relative to the
    maze origin (top-left of the sprite); it is on a cell centre when
@@ -22,6 +32,7 @@ struct Actor {
 	int Col() const;
 	int Row() const;
 	bool AtCenter() const;
+	bool Overlaps(int col, int row) const;
 	void Place(int col, int row) { x = col * TILE; y = row * TILE; dir = DIR_NONE; acc = 0; moving = false; }
 };
 
@@ -32,6 +43,30 @@ struct Ghost : Actor {
 	int label;      /* player whose ghost this originally was */
 	GhostMode mode;
 	int start_col, start_row;
+};
+
+/* A wall block patrolling a straight run of empty cells. While sliding
+   it blocks both the cell it left and the one it is entering. */
+struct MovingWall {
+	int col, row;            /* cell it is in (or entering) */
+	int from_col, from_row;  /* cell it is leaving while sliding */
+	int slide;               /* ticks of sliding left, 0 when still */
+	int start_col, start_row, dx, dy, span, pos, step;
+	int period, wait;
+
+	bool Blocks(int c, int r) const
+	{
+		return (c == col && r == row) || (slide > 0 && c == from_col && r == from_row);
+	}
+};
+
+/* Another player's Pac-Man, as last reported. */
+struct RemotePac {
+	int terrain;
+	int x, y;
+	Dir dir;
+	int anim;
+	int age;  /* ticks since the last report */
 };
 
 enum PlayerState { PS_PLAYING, PS_PAUSED, PS_GAMEOVER, PS_LEFT };
@@ -51,7 +86,7 @@ public:
 	Game();
 	~Game();
 	/* players: 1 for single player. my_id is 1-based. net may be NULL. */
-	bool Init(int difficulty, int speed, int players, int my_id, Net* net);
+	bool Init(int difficulty, int speed, int players, int my_id, Net* net, int options = OPT_ALL);
 	void Tick(const Input& in);   /* one 1/60 s step */
 	void Draw(BITMAP* buf, int fps);
 	bool Finished() const { return phase == PHASE_GAMEOVER || phase == PHASE_COMPLETED; }
@@ -64,13 +99,22 @@ public:
 private:
 	Level level;
 	Net* net;
-	int difficulty, speed, num_players, my_id;
+	int difficulty, speed, num_players, my_id, options;
 	PlayerInfo players[MAX_PLAYERS + 1];  /* index 1..MAX_PLAYERS */
 
 	Actor pac;
 	Dir wanted;
 	int pac_anim;
-	std::vector<Ghost> ghosts;
+	int pac_terrain;                 /* whose maze my Pac-Man is in */
+	std::vector<Ghost> ghosts;       /* the ghosts of my own maze */
+	std::vector<MovingWall> walls;   /* the moving walls of my own maze */
+
+	/* Seen from another player's maze while my Pac-Man visits it. */
+	std::vector<Ghost> remote_ghosts;
+	std::vector<MovingWall> remote_walls;
+	int remote_fright;
+	std::map<int, RemotePac> remote_pacs;
+	std::map<int, int> hit_cooldown; /* host: visitor id -> ticks */
 
 	Phase phase;
 	int phase_ticks;
@@ -78,9 +122,15 @@ private:
 	int ghost_combo;
 	int schedule_index, schedule_ticks;
 	bool scatter;
+	int dot_move_ticks;
+	int auto_send_cooldown;
+	int tick_count;
+	std::string notice;
+	int notice_ticks;
 
 	/* bitmaps */
 	BITMAP* wall_bmp[15];
+	BITMAP* block_bmp;
 	BITMAP* pac_bmp[4];
 	BITMAP* dead_bmp;
 	BITMAP* life_bmp;
@@ -96,38 +146,63 @@ private:
 	bool attack_playing;
 
 	bool LoadAssets();
+	bool LoadWalls(const std::string& path);
 	void ResetActors();
 	void AddGhost(int color, int label, int col, int row, GhostMode mode);
 
+	bool Multiplayer() const { return num_players > 1; }
+	bool Away() const { return pac_terrain != my_id; }
+	bool Opt(int o) const { return (options & o) != 0; }
+
 	float PacSpeed() const;
 	float GhostSpeed(const Ghost& g) const;
+	bool WallAt(const std::vector<MovingWall>& ws, int col, int row) const;
 	bool PacCanEnter(int col, int row) const;
 	bool GhostCanEnter(const Ghost& g, int col, int row) const;
 	void MovePacman(const Input& in);
-	void MoveGhost(Ghost& g);
+	void MoveGhost(size_t i);
 	Dir ChooseGhostDir(Ghost& g);
+	bool NearestPacman(const Ghost& g, int& col, int& row, Dir& dir) const;
 	void GhostTarget(const Ghost& g, int& tc, int& tr) const;
+	void MoveWalls();
+	bool CellOccupied(int col, int row) const;
+	void MoveDots();
 
 	void EatAt(int col, int row);
 	void StartFright();
 	void UpdateFright();
 	void UpdateSchedule();
 	void CheckCollisions();
+	void CheckVisitorCollisions();
+	void CheckCornered();
 	void Die();
 	void CheckCompleted();
 	bool LocallyPaused() const;
 	bool AnyonePaused() const;
+	void Notify(const std::string& text);
 
+	/* multiplayer */
 	void Send(const char* fmt, ...);
-	void SendGhostTo(int to);
+	bool Active(int id) const;
 	int NextPlayer() const;
+	int NeighbourTerrain(int from, int step) const;
+	void SendGhost(size_t i, int to, int col, int row, Dir dir);
+	void SendGhostTo(int to);
 	void RequestMark(const char* what, int from, int to);
-	void MoveMark(int idx, int owner);
+	void MoveMark(int id, int owner);
 	void TransferMark(CellType type, int from, int to);
 	void Redistribute(int from);
+	void EnterTerrain(int terrain);
+	void ReturnHome();
+	void SendPosition();
+	void SendSnapshot();
+	void ReadSnapshot(const std::vector<int>& a);
 
 	void DrawText(BITMAP* buf, int x, int y, const char* fmt, ...);
 	void DrawCentered(BITMAP* buf, int y, const char* text);
+	void DrawPac(BITMAP* buf, int x, int y, Dir dir, int anim);
+	void DrawGhosts(BITMAP* buf, const std::vector<Ghost>& gs, int fright);
+	void DrawWalls(BITMAP* buf, const std::vector<MovingWall>& ws);
 };
 
 #endif

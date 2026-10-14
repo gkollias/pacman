@@ -57,6 +57,38 @@ static int Menu(const char* title, const char* const* options, int count, int se
 	}
 }
 
+/* Toggles for the optional features. Returns -1 on Escape. */
+static int OptionsMenu(int options)
+{
+	static const char* const NAMES[] = {
+		"Moving walls", "Moving power dots",
+		"Tunnel leads to the next player's maze (LAN)", "Cornered: send a ghost away (LAN)",
+	};
+	static const int FLAGS[] = { OPT_MOVING_WALLS, OPT_MOVING_DOTS, OPT_TERRAINS, OPT_AUTO_SEND };
+	int selected = 0;
+	for (;;) {
+		NextFrame();
+		if (input.Pressed(KEY_ESC)) return -1;
+		if (input.Pressed(KEY_UP) && selected > 0) selected--;
+		if (input.Pressed(KEY_DOWN) && selected < 3) selected++;
+		for (int i = 0; i < 4; i++)
+			if (input.Pressed(KEY_1 + i)) { selected = i; options ^= FLAGS[i]; }
+		if (input.Pressed(KEY_SPACE)) options ^= FLAGS[selected];
+		if (input.Pressed(KEY_ENTER) || input.Pressed(KEY_ENTER_PAD)) return options;
+
+		clear_to_color(buffer, makecol(0, 0, 0));
+		Text(220, 183, "Options (1-4 or Space to toggle, Enter to play):");
+		for (int i = 0; i < 4; i++) {
+			char line[96];
+			snprintf(line, sizeof(line), "%s%d.[%s] %s", i == selected ? "> " : "  ", i + 1,
+			         (options & FLAGS[i]) ? "x" : " ", NAMES[i]);
+			Text(212, 203 + 10 * i, line);
+		}
+		Text(440, 590, "Press Escape to quit.");
+		Show();
+	}
+}
+
 /* Shows a message until Enter or Escape. */
 static void Notice(const char* line1, const char* line2)
 {
@@ -113,7 +145,7 @@ static int Lobby(Net& net)
 
 /* Client lobby: wait for [START]. Fills in the game settings. */
 static bool WaitForStart(Net& net, int& my_id, int& players, int& difficulty, int& speed,
-                         std::vector<std::string>& after_start)
+                         int& options, std::vector<std::string>& after_start)
 {
 	int lobby = 0;
 	for (;;) {
@@ -122,11 +154,11 @@ static bool WaitForStart(Net& net, int& my_id, int& players, int& difficulty, in
 		std::vector<Net::Message> msgs = net.Poll();
 		for (size_t i = 0; i < msgs.size(); i++) {
 			const char* t = msgs[i].text.c_str();
-			int a, b, c;
+			int a, b, c, d;
 			if (sscanf(t, "[WELCOME %d]", &a) == 1) my_id = a;
 			else if (sscanf(t, "[LOBBY %d]", &a) == 1) lobby = a;
-			else if (sscanf(t, "[START %d %d %d]", &a, &b, &c) == 3) {
-				players = a; difficulty = b; speed = c;
+			else if (sscanf(t, "[START %d %d %d %d]", &a, &b, &c, &d) == 4) {
+				players = a; difficulty = b; speed = c; options = d;
 				/* Game messages may arrive in the same read as START. */
 				for (size_t j = i + 1; j < msgs.size(); j++) after_start.push_back(msgs[j].text);
 				return my_id > 1;
@@ -203,7 +235,7 @@ int main()
 		if (mode < 0) break;
 
 		Net* net = NULL;
-		int my_id = 1, players = 1, difficulty = NORMAL, speed = MEDIUM;
+		int my_id = 1, players = 1, difficulty = NORMAL, speed = MEDIUM, options = OPT_ALL;
 		std::vector<std::string> after_start;
 
 		if (mode == 2) {
@@ -217,12 +249,14 @@ int main()
 				delete net;
 				continue;
 			}
-			if (!WaitForStart(*net, my_id, players, difficulty, speed, after_start)) { delete net; continue; }
+			if (!WaitForStart(*net, my_id, players, difficulty, speed, options, after_start)) { delete net; continue; }
 		} else {
 			difficulty = Menu("Select the difficulty of the Game and press enter:", DIFFICULTIES, 3, NORMAL);
 			if (difficulty < 0) continue;
 			speed = Menu("Select the speed of the Game and press enter:", SPEEDS, 3, MEDIUM);
 			if (speed < 0) continue;
+			options = OptionsMenu(options);
+			if (options < 0) continue;
 			if (mode == 1) {
 				net = new Net();
 				if (!net->Host(PACMAN_PORT)) {
@@ -236,14 +270,14 @@ int main()
 				else {
 					net->CloseLobby();
 					char start[64];
-					snprintf(start, sizeof(start), "[START %d %d %d]", players, difficulty, speed);
+					snprintf(start, sizeof(start), "[START %d %d %d %d]", players, difficulty, speed, options);
 					net->Send(start);
 				}
 			}
 		}
 
 		Game* game = new Game();
-		if (game->Init(difficulty, speed, players, my_id, net)) {
+		if (game->Init(difficulty, speed, players, my_id, net, options)) {
 			for (size_t i = 0; i < after_start.size(); i++) game->HandleMessage(after_start[i]);
 			Play(*game, net);
 		}

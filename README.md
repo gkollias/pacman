@@ -32,4 +32,10 @@ cd Pacman2 && make run
   (to/from the next player).
 - When a player loses or leaves, their dots are shared among the others; if the server goes
   away, clients finish the game on their own.
+- Optional features (Options menu, all on by default; the host's choice applies to everyone):
+  - moving walls: blocks slide along the empty corridors (`init/moving_walls.txt`);
+  - moving power dots: they wander into corridors you have already cleared;
+  - terrains (LAN): the side tunnel leads into the next player's maze, where their ghosts
+    hunt you; ghosts can wander over too;
+  - cornered (LAN): when ghosts block every way out, the nearest one is sent to the next player.
 - `make test` runs the game-logic tests (including multiplayer, over an in-memory network).
