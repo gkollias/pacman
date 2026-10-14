@@ -10,6 +10,16 @@
 #define ORIGIN_Y 24
 #define TICKS_PER_SEC 60
 
+/* The browser build is single player only, and Escape returns to the
+   menu instead of quitting (a web page has nothing to quit to). */
+#ifdef __EMSCRIPTEN__
+#define WEB_BUILD 1
+#define ESCAPE_HINT "Press Escape for the menu."
+#else
+#define WEB_BUILD 0
+#define ESCAPE_HINT "Press Escape to quit."
+#endif
+
 enum Dir { DIR_NONE = -1, DIR_UP = 0, DIR_DOWN = 1, DIR_LEFT = 2, DIR_RIGHT = 3 };
 
 static const int DIR_DX[4] = { 0, 0, -1, 1 };

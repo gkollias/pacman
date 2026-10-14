@@ -12,6 +12,9 @@
 #include <map>
 #include <string>
 #include <vector>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 BITMAP* screen = NULL;
 int SCREEN_W = 0;
@@ -62,15 +65,54 @@ void allegro_message(const char* fmt, ...)
 
 /* ---- timers -------------------------------------------------------- */
 
+int install_timer(void)
+{
+	return SDL_InitSubSystem(SDL_INIT_EVENTS) ? 0 : -1;
+}
+
+#ifdef __EMSCRIPTEN__
+/* A browser page has no timer threads: run the callbacks from the main
+   thread, catching up on elapsed time whenever the program waits
+   (rest) or reads the keyboard. */
+struct PolledTimer { void (*proc)(void); Uint64 period_ns, next_ns; };
+static std::vector<PolledTimer> g_timers;
+
+static void RunTimers(void)
+{
+	Uint64 now = SDL_GetTicksNS();
+	for (size_t i = 0; i < g_timers.size(); i++) {
+		PolledTimer& t = g_timers[i];
+		int calls = 0;
+		while (now >= t.next_ns && calls++ < 10) {  /* don't spiral after a stall */
+			t.proc();
+			t.next_ns += t.period_ns;
+		}
+		if (now >= t.next_ns) t.next_ns = now + t.period_ns;
+	}
+}
+
+int install_int_ex(void (*proc)(void), long speed)
+{
+	PolledTimer t;
+	t.proc = proc;
+	t.period_ns = (Uint64)(speed > 0 ? speed : 1) * 1000;
+	t.next_ns = SDL_GetTicksNS() + t.period_ns;
+	g_timers.push_back(t);
+	return 0;
+}
+
+/* Yields to the browser (needs -sASYNCIFY) so the page stays responsive. */
+void rest(unsigned int ms)
+{
+	RunTimers();
+	emscripten_sleep(ms);
+	RunTimers();
+}
+#else
 static Uint32 TimerTrampoline(void* userdata, SDL_TimerID, Uint32 interval)
 {
 	((void (*)(void))userdata)();
 	return interval;
-}
-
-int install_timer(void)
-{
-	return SDL_InitSubSystem(SDL_INIT_EVENTS) ? 0 : -1;
 }
 
 int install_int_ex(void (*proc)(void), long speed)
@@ -81,6 +123,7 @@ int install_int_ex(void (*proc)(void), long speed)
 }
 
 void rest(unsigned int ms) { SDL_Delay(ms); }
+#endif
 
 /* ---- graphics ------------------------------------------------------ */
 
@@ -310,11 +353,18 @@ void textprintf_ex(BITMAP* bmp, const FONT*, int x, int y, int color, int bg, co
 int install_keyboard(void) { return 0; }
 void clear_keybuf(void) {}
 
+/* Keys pressed since key[] last looked at them. A tap shorter than the
+   game's polling interval would otherwise be missed entirely. */
+static bool g_tapped[SDL_SCANCODE_COUNT];
+
 static void PumpEvents(void)
 {
 	SDL_Event e;
 	while (SDL_PollEvent(&e)) {
 		switch (e.type) {
+		case SDL_EVENT_KEY_DOWN:
+			if (!e.key.repeat && e.key.scancode < SDL_SCANCODE_COUNT) g_tapped[e.key.scancode] = true;
+			break;
 		case SDL_EVENT_QUIT:
 			SDL_Quit();
 			exit(0);
@@ -337,7 +387,7 @@ bool KeyArray::operator[](int scancode) const
 	static int queries = 0;
 	Uint64 now = SDL_GetTicksNS();
 	if (now - last_ns < 1000000) {
-		if (++queries > 1000) { SDL_Delay(1); queries = 0; }
+		if (++queries > 1000) { rest(1); queries = 0; }
 	} else {
 		queries = 0;
 	}
@@ -345,7 +395,10 @@ bool KeyArray::operator[](int scancode) const
 
 	PumpEvents();
 	const bool* state = SDL_GetKeyboardState(NULL);
-	return state[scancode];
+	/* Held now, or tapped since the last time this key was checked. */
+	bool down = state[scancode] || g_tapped[scancode];
+	g_tapped[scancode] = false;
+	return down;
 }
 
 /* ---- sound --------------------------------------------------------- */

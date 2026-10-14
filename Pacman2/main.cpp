@@ -52,7 +52,7 @@ static int Menu(const char* title, const char* const* options, int count, int se
 			Text(212, 193 + 10 * i, line);
 		}
 		Text(220, 193 + 10 * count + 20, "Use 1-3 or the arrow keys, then Enter.");
-		Text(440, 590, "Press Escape to quit.");
+		Text(440, 590, ESCAPE_HINT);
 		Show();
 	}
 }
@@ -65,26 +65,28 @@ static int OptionsMenu(int options)
 		"Tunnel leads to the next player's maze (LAN)", "Cornered: send a ghost away (LAN)",
 	};
 	static const int FLAGS[] = { OPT_MOVING_WALLS, OPT_MOVING_DOTS, OPT_TERRAINS, OPT_AUTO_SEND };
+	const int count = WEB_BUILD ? 2 : 4;  /* the LAN options don't apply on the web */
 	int selected = 0;
 	for (;;) {
 		NextFrame();
 		if (input.Pressed(KEY_ESC)) return -1;
 		if (input.Pressed(KEY_UP) && selected > 0) selected--;
-		if (input.Pressed(KEY_DOWN) && selected < 3) selected++;
-		for (int i = 0; i < 4; i++)
+		if (input.Pressed(KEY_DOWN) && selected < count - 1) selected++;
+		for (int i = 0; i < count; i++)
 			if (input.Pressed(KEY_1 + i)) { selected = i; options ^= FLAGS[i]; }
 		if (input.Pressed(KEY_SPACE)) options ^= FLAGS[selected];
 		if (input.Pressed(KEY_ENTER) || input.Pressed(KEY_ENTER_PAD)) return options;
 
 		clear_to_color(buffer, makecol(0, 0, 0));
-		Text(220, 183, "Options (1-4 or Space to toggle, Enter to play):");
-		for (int i = 0; i < 4; i++) {
+		Text(220, 183, WEB_BUILD ? "Options (1-2 or Space to toggle, Enter to play):"
+		                         : "Options (1-4 or Space to toggle, Enter to play):");
+		for (int i = 0; i < count; i++) {
 			char line[96];
 			snprintf(line, sizeof(line), "%s%d.[%s] %s", i == selected ? "> " : "  ", i + 1,
 			         (options & FLAGS[i]) ? "x" : " ", NAMES[i]);
 			Text(212, 203 + 10 * i, line);
 		}
-		Text(440, 590, "Press Escape to quit.");
+		Text(440, 590, ESCAPE_HINT);
 		Show();
 	}
 }
@@ -231,8 +233,13 @@ int main()
 	std::string address = "127.0.0.1";
 
 	for (;;) {
+#if WEB_BUILD
+		int mode = 0;  /* single player: browsers can't host or join LAN games */
+		(void)MODES;
+#else
 		int mode = Menu("Enter your choice:", MODES, 3, 0);
 		if (mode < 0) break;
+#endif
 
 		Net* net = NULL;
 		int my_id = 1, players = 1, difficulty = NORMAL, speed = MEDIUM, options = OPT_ALL;

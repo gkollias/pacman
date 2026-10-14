@@ -1261,5 +1261,5 @@ void Game::Draw(BITMAP* buf, int fps)
 	else if (notice_ticks > 0)
 		DrawCentered(buf, 546, notice.c_str());
 
-	DrawText(buf, 440, 590, "Press Escape to quit.");
+	DrawText(buf, 440, 590, ESCAPE_HINT);
 }

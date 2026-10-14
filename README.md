@@ -33,6 +33,15 @@ cd Pacman2 && make app
 
 Hosting a LAN game makes macOS ask once whether Pacman may accept incoming connections.
 
+**Play in the browser (single player): https://gkollias.github.io/pacman/** — built to
+WebAssembly with Emscripten and published by `.github/workflows/pages.yml` on every push to `main`.
+To build it locally:
+
+```bash
+brew install emscripten
+cd Pacman2 && make serve   # then open http://localhost:8080
+```
+
 - Menus: single player / host (server) / join (client), then difficulty and speed.
 - Up to 4 players on a LAN (TCP port 10000). The maze is split into territories; your dots are
   yellow, teammates' are red. The team wins when every dot is eaten.

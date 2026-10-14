@@ -49,6 +49,22 @@ app: pacman macos/Info.plist macos/Pacman.icns
 	codesign --force --sign - $(APP)/Contents/Frameworks/libSDL3.0.dylib
 	codesign --force --sign - $(APP)
 
+# Browser build (single player): WebAssembly via Emscripten's SDL3 port.
+#   brew install emscripten && make web && make serve
+# -sASYNCIFY lets the game's waits (rest) yield to the browser.
+EMXX     ?= em++
+WEB_OUT   = web
+WEB_FLAGS = -std=c++11 -O2 -I$(COMPAT) --use-port=sdl3 -sASYNCIFY -sALLOW_MEMORY_GROWTH \
+            --preload-file images@/images --preload-file init@/init --preload-file sounds@/sounds \
+            --shell-file web_shell.html
+
+web: $(SRCS) $(COMPAT)/allegro_compat.cpp $(wildcard *.h) $(COMPAT)/allegro.h web_shell.html
+	@mkdir -p $(WEB_OUT)
+	$(EMXX) $(WEB_FLAGS) $(SRCS) $(COMPAT)/allegro_compat.cpp -o $(WEB_OUT)/index.html
+
+serve: web
+	python3 -m http.server 8080 --directory $(WEB_OUT)
+
 # Game-logic tests (no window or sound needed).
 TEST_OBJS = $(OBJDIR)/game.o $(OBJDIR)/level.o $(OBJDIR)/net.o $(OBJDIR)/input.o \
             $(OBJDIR)/allegro_compat.o $(OBJDIR)/logic_test.o
@@ -64,6 +80,6 @@ test: logic_test
 	./logic_test
 
 clean:
-	rm -rf $(OBJDIR) pacman logic_test $(APP)
+	rm -rf $(OBJDIR) pacman logic_test $(APP) $(WEB_OUT)
 
-.PHONY: run test app clean
+.PHONY: run test app web serve clean
